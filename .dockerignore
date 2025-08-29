@@ -1,0 +1,10 @@
+.venv
+__pycache__/
+*.pyc
+.out/
+out/
+.git
+.gitignore
+*.xlsx
+*.log
+sales_old.json

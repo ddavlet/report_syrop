@@ -1,0 +1,27 @@
+# settings.py (фрагмент)
+from dataclasses import dataclass
+from pathlib import Path
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BASE_DIR = Path(__file__).resolve().parent
+OUT_DIR = BASE_DIR / "out"
+OUT_DIR.mkdir(exist_ok=True)
+
+@dataclass(frozen=True)
+class Settings:
+    sales_json_path: Path = Path(os.getenv("SALES_JSON_PATH", BASE_DIR / "sales.json"))
+    data_backend: str = os.getenv("DATA_BACKEND", "json").lower()  # json | fake | postgres
+
+    # Postgres (когда подключишь)
+    pg_dsn: str = os.getenv("PG_DSN", "")
+    pg_table: str = os.getenv("PG_TABLE", "sales")
+
+    # бот (если нужно)
+    telegram_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
+    telegram_allowed_user_ids: str = os.getenv("BOT_ALLOWED_USER_IDS", "")
+
+settings = Settings()

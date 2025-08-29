@@ -1,0 +1,76 @@
+services:
+  db:
+    image: postgres:15
+    container_name: report_syrop_db
+    environment:
+      POSTGRES_DB: reportdb
+      POSTGRES_USER: reportuser
+      POSTGRES_PASSWORD: reportpass
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: report_syrop_app:latest
+    container_name: report_syrop_app
+    working_dir: /app
+    volumes:
+      - ./:/app
+      - ./out:/app/out
+    environment:
+      # core app config
+      DATA_BACKEND: postgres
+      PG_DSN: postgresql+psycopg2://reportuser:reportpass@db:5432/reportdb
+      # optional: telegram bot config
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      BOT_ALLOWED_USER_IDS: ${BOT_ALLOWED_USER_IDS:-}
+      # optional: fallback sales json path if you ever use DATA_BACKEND=json
+      SALES_JSON_PATH: ${SALES_JSON_PATH:-/app/sales.json}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["python", "bot.py"]
+
+  uploader:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: report_syrop_uploader:latest
+    container_name: report_syrop_uploader
+    working_dir: /app
+    volumes:
+      - ./:/app
+      - ./out:/app/out
+    environment:
+      DATA_BACKEND: postgres
+      PG_DSN: postgresql+psycopg2://reportuser:reportpass@db:5432/reportdb
+      UPLOAD_HOST: 0.0.0.0
+      UPLOAD_PORT: 8000
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    command: ["python", "upload_server.py"]
+
+  adminer:
+    image: adminer:latest
+    container_name: report_syrop_adminer
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_started
+
+volumes:
+  pg_data:
