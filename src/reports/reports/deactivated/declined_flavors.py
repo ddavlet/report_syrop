@@ -4,9 +4,9 @@ from pathlib import Path
 import json
 import pandas as pd
 
-from core import BaseReport, register_report
-from data_loader import load_sales_df
-from settings import settings
+from src.core import BaseReport, register_report
+from src.core import load_sales_df
+from src.settings import settings
 
 
 def _pick_item_col(df: pd.DataFrame):

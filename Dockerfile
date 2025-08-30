@@ -18,4 +18,5 @@ RUN pip install -r requirements.txt
 COPY . /app
 
 # Default command runs Telegram bot
-CMD ["python", "bot.py"]
+ENV PYTHONPATH=/app
+CMD ["python", "-m", "src.bot"]

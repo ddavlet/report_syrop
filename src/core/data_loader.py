@@ -9,12 +9,12 @@ from typing import Literal, Optional
 
 import pandas as pd
 
-from settings import settings
+from src.settings import settings
 
 Backend = Literal["json", "fake", "postgres"]
 
 
-def load_sales_df(backend: Optional[Backend] = None) -> pd.DataFrame:
+def load_sales_df(backend: Optional[Backend] = None, start_date: Optional[datetime] = None) -> pd.DataFrame:
     """
     Универсальный загрузчик данных о продажах.
     Возвращает DataFrame с колонками:
@@ -28,20 +28,21 @@ def load_sales_df(backend: Optional[Backend] = None) -> pd.DataFrame:
     backend = (backend or getattr(settings, "data_backend", "json")).lower()
 
     if backend == "json":
-        return _load_from_json(getattr(settings, "sales_json_path", Path("sales.json")))
+        return _load_from_json(getattr(settings, "sales_json_path", Path("data/sales.json")), start_date=start_date)
     elif backend == "fake":
         return _load_fake_data()
     elif backend == "postgres":
         return _load_from_postgres(
             pg_dsn=getattr(settings, "pg_dsn", ""),
             table=getattr(settings, "pg_table", "sales"),
+            start_date=start_date,
         )
     else:
         raise ValueError(f"Unknown DATA_BACKEND='{backend}'")
 
 
 # ---------------- JSON ----------------
-def _load_from_json(path: Path) -> pd.DataFrame:
+def _load_from_json(path: Path, start_date: Optional[datetime] = None) -> pd.DataFrame:
     """
     Ожидаемый формат JSON-файла:
     [
@@ -63,43 +64,15 @@ def _load_from_json(path: Path) -> pd.DataFrame:
             "price_type": str(o.get("price_type", "")),
             "order_id": str(o.get("id") or o.get("order_id") or ""),
         })
-    df = pd.DataFrame(rows)
-    _normalize_dtypes(df)
-    return df
-
-
-# ---------------- FAKE ----------------
-def _load_fake_data(n_clients: int = 30, days: int = 180, seed: int = 42) -> pd.DataFrame:
-    """
-    Простая генерация фейковых продаж на последние `days` дней для разработки.
-    """
-    random.seed(seed)
-    today = datetime.now().date()
-    clients = [f"Client {i:03d}" for i in range(1, n_clients + 1)]
-    price_types = ["retail", "wholesale", "promo"]
-
-    rows = []
-    order_counter = 1
-    for c in clients:
-        k = random.randint(1, 12)  # кол-во покупок на клиента
-        dates = sorted({today - timedelta(days=random.randint(0, days)) for _ in range(k)})
-        for d in dates:
-            rows.append({
-                "client": c,
-                "date": datetime.combine(d, datetime.min.time()),
-                "total_sum": round(random.uniform(15, 600), 2),
-                "price_type": random.choice(price_types),
-                "order_id": f"FAKE-{order_counter}",
-            })
-            order_counter += 1
-
+    if start_date:
+        rows = [r for r in rows if r["date"] >= start_date]
     df = pd.DataFrame(rows)
     _normalize_dtypes(df)
     return df
 
 
 # ---------------- POSTGRES ----------------
-def _load_from_postgres(pg_dsn: str, table: str) -> pd.DataFrame:
+def _load_from_postgres(pg_dsn: str, table: str, start_date: Optional[datetime] = None) -> pd.DataFrame:
     """
     Читает данные из Postgres.
     Требуются пакеты:
@@ -117,10 +90,23 @@ def _load_from_postgres(pg_dsn: str, table: str) -> pd.DataFrame:
         raise RuntimeError("Install: pip install sqlalchemy psycopg2-binary") from e
 
     engine = create_engine(pg_dsn)
-    query = text(f"""
-        SELECT client, date, total_sum, price_type, order_id
-        FROM {table}
-    """)
+
+    # Build query conditionally based on whether start_date is provided
+    if start_date:
+        # Ensure start_date is a datetime object
+        if not isinstance(start_date, datetime):
+            raise ValueError(f"start_date must be a datetime object, got {type(start_date)}: {start_date}")
+
+        query = text(f"""
+            SELECT client, date, total_sum, price_type, order_id
+            FROM {table}
+            WHERE date >= '{start_date.strftime("%Y-%m-%d")}'
+        """)
+    else:
+        query = text(f"""
+            SELECT client, date, total_sum, price_type, order_id
+            FROM {table}
+        """)
 
     with engine.connect() as conn:
         df = pd.read_sql(query, conn, parse_dates=["date"])

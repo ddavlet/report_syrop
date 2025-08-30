@@ -1,16 +1,17 @@
+# bot.py - Telegram bot for running reports
+from __future__ import annotations
+
 import json
 from pathlib import Path
-
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 from aiogram.enums import ChatAction
 from aiogram.client.default import DefaultBotProperties
 
-from settings import settings
-from core import ReportRegistry
-from runner import run_report
-import reports  # noqa — автодискавери, регистрация отчётов
+from src.settings import settings
+from src.core import ReportRegistry
+import src.reports as reports  # noqa: регистрирует отчёты
 
 # --- доступ по списку user_id (через запятую) ---
 _ALLOWED = set()
@@ -23,6 +24,8 @@ dp = Dispatcher()
 # --- Простая in-memory сессия выбора параметров на пользователя ---
 # Формат: { user_id: {"slug": str, "params": dict} }
 _USER_STATE: dict[int, dict] = {}
+
+
 
 
 def _escape_html(text: str) -> str:
@@ -79,24 +82,15 @@ def _get_param_presets(slug: str) -> dict[str, list]:
             "dim": [
                 "overall",
                 "client",
-                "price_type",
                 "month",
                 "client_month",
-                "price_type_month",
             ],
-            "period_days": [7, 14, 30, 60],
-        }
-    if slug == "declined_flavors":
-        return {
-            "recent_days": [14, 30, 60],
-            "baseline_days": [60, 90, 180],
-            "min_item_orders_base": [1, 3, 5],
-            "min_client_orders_recent": [1, 2, 3],
-            "min_drop_pct": [30, 50, 70],
+            "period_days": [15, 30, 60 , 90, 180],
         }
     if slug == "inactive_clients":
         return {
             "cutoff_days": [30, 60, 90, 120],
+            "start_date": ["Начало года", 90, 180, 365],
         }
     if slug == "new_customers":
         return {
@@ -105,7 +99,15 @@ def _get_param_presets(slug: str) -> dict[str, list]:
     if slug == "purchase_frequency":
         return {
             "min_orders": [1, 2, 3, 5],
-            "period_days": [7, 14, 30, 60],
+            "period_days": [15, 30, 60 , 90, 180],
+        }
+    if slug == "abc_items":
+        return {
+            "period_days": [15, 30, 60 , 90, 180],
+        }
+    if slug == "abc_goods":
+        return {
+            "period_days": [15, 30, 60 , 90, 180],
         }
     # по умолчанию — без параметров
     return {}
@@ -167,6 +169,20 @@ def _check_access(message: Message) -> bool:
     return message.from_user and message.from_user.id in _ALLOWED
 
 
+def run_report(slug: str, params: dict | None = None) -> Path:
+    """Run a report and return the output file path"""
+    from src.settings import OUT_DIR
+
+    cls = ReportRegistry.get(slug)
+    report = cls(params=params or {})
+    df = report.compute()
+    out_dir = OUT_DIR / report.slug
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / report.default_filename()
+    report.export_excel(df, out_path, title=report.title)
+    return out_path
+
+
 # --- Старт: приветствие и кнопка "📊 Список отчётов"
 @dp.message(Command("start"))
 async def cmd_start(m: Message):
@@ -179,8 +195,11 @@ async def cmd_start(m: Message):
             [InlineKeyboardButton(text="📊 Список отчётов", callback_data="list_reports")]
         ]
     )
-
-    await m.answer("Привет! Я бот для генерации отчётов.\nНажми кнопку ниже:", reply_markup=kb)
+    await m.answer(
+        "👋 Привет! Я бот для генерации отчётов по продажам.\n\n"
+        "Нажмите кнопку ниже, чтобы выбрать отчёт.",
+        reply_markup=kb
+    )
 
 
 # --- Кнопка: список отчётов
@@ -188,38 +207,37 @@ async def cmd_start(m: Message):
 async def cb_list_reports(c: CallbackQuery):
     reports_list = ReportRegistry.all()
     if not reports_list:
-        await c.message.edit_text("Пока нет доступных отчётов.")
+        await c.answer("Нет доступных отчётов", show_alert=True)
         return
 
-    # Кнопки для каждого отчёта
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=cls.title or slug, callback_data=f"run_report:{slug}")]
-            for slug, cls in reports_list.items()
-        ]
+    rows: list[list[InlineKeyboardButton]] = []
+    for slug, cls in reports_list.items():
+        rows.append([
+            InlineKeyboardButton(text=cls.title or slug, callback_data=f"run_report:{slug}"),
+        ])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+    await c.message.edit_text(
+        "📊 <b>Доступные отчёты:</b>\n\nВыберите отчёт для запуска:",
+        reply_markup=kb
     )
-    await c.message.edit_text("Выбери отчёт:", reply_markup=kb)
 
 
-# --- Кнопка: выбор конкретного отчёта → экран параметров
+# --- Кнопка: выбор отчёта (показываем параметры)
 @dp.callback_query(F.data.startswith("run_report:"))
 async def cb_run_report(c: CallbackQuery):
     slug = c.data.split(":", 1)[1]
-
     try:
         cls = ReportRegistry.get(slug)
     except KeyError:
         await c.answer(f"Неизвестный отчёт: {slug}", show_alert=True)
         return
 
+    # инициализируем состояние пользователя
     user_id = c.from_user.id if c.from_user else 0
-    # инициализируем состояние с дефолтными параметрами
-    _USER_STATE[user_id] = {
-        "slug": slug,
-        "params": _get_default_params_from_presets(slug),
-    }
-
+    _USER_STATE[user_id] = {"slug": slug, "params": _get_default_params_from_presets(slug)}
     params = _USER_STATE[user_id]["params"]
+
     kb = _build_params_keyboard(slug, params)
     await c.message.edit_text(
         f"<b>{cls.title or slug}</b>\n\nВыберите параметры (только кнопки).\nТекущие: {_render_params_summary(params)}",
@@ -276,7 +294,8 @@ async def cb_reset_params(c: CallbackQuery):
 @dp.callback_query(F.data.startswith("explain:"))
 async def cb_explain(c: CallbackQuery):
     slug = c.data.split(":", 1)[1]
-    md_path = Path(__file__).parent / "reports" / f"{slug}.md"
+    # markdown files live alongside code: src/reports/reports/{slug}.md
+    md_path = Path(__file__).resolve().parents[0] / "reports" / "reports" / f"{slug}.md"
     if not md_path.exists():
         await c.answer("Описание не найдено", show_alert=True)
         return
@@ -319,7 +338,9 @@ async def cb_do_run(c: CallbackQuery):
 
 
 def main():
+    """Run the Telegram bot"""
     import asyncio
+    print("🤖 Starting Telegram bot...")
     asyncio.run(dp.start_polling(bot))
 
 

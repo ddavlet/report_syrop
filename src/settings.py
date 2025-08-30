@@ -6,13 +6,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-BASE_DIR = Path(__file__).resolve().parent
+# Project root (one level above src/)
+BASE_DIR = Path(__file__).resolve().parent.parent
 OUT_DIR = BASE_DIR / "out"
 OUT_DIR.mkdir(exist_ok=True)
 
 @dataclass(frozen=True)
 class Settings:
-    sales_json_path: Path = Path(os.getenv("SALES_JSON_PATH", BASE_DIR / "sales.json"))
+    sales_json_path: Path = Path(os.getenv("SALES_JSON_PATH", BASE_DIR / "data/sales.json"))
     data_backend: str = os.getenv("DATA_BACKEND", "json").lower()  # json | fake | postgres
 
     # Postgres (когда подключишь)

@@ -1,8 +1,8 @@
 from datetime import datetime, timedelta
 import pandas as pd
 
-from core import BaseReport, register_report
-from data_loader import load_sales_df
+from src.core import BaseReport, register_report
+from src.core import load_sales_df
 
 @register_report
 class NewCustomersReport(BaseReport):

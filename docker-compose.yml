@@ -35,33 +35,38 @@ services:
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       BOT_ALLOWED_USER_IDS: ${BOT_ALLOWED_USER_IDS:-}
       # optional: fallback sales json path if you ever use DATA_BACKEND=json
-      SALES_JSON_PATH: ${SALES_JSON_PATH:-/app/sales.json}
+      SALES_JSON_PATH: ${SALES_JSON_PATH:-/app/data/sales.json}
+      PYTHONPATH: /app
     depends_on:
       db:
         condition: service_healthy
-    command: ["python", "bot.py"]
+    command: ["python", "-m", "src.bot"]
 
-  uploader:
+  data_loader:
     build:
       context: .
       dockerfile: Dockerfile
-    image: report_syrop_uploader:latest
-    container_name: report_syrop_uploader
+    image: report_syrop_data_loader:latest
+    container_name: report_syrop_data_loader
     working_dir: /app
     volumes:
       - ./:/app
-      - ./out:/app/out
+      - ./data:/app/data
+    ports:
+      - "5500:8000"
     environment:
+      # core app config
       DATA_BACKEND: postgres
       PG_DSN: postgresql+psycopg2://reportuser:reportpass@db:5432/reportdb
-      UPLOAD_HOST: 0.0.0.0
-      UPLOAD_PORT: 8000
+      PG_TABLE: sales
+      # optional: telegram bot config for notifications
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      PYTHONPATH: /app
     depends_on:
       db:
         condition: service_healthy
-    ports:
-      - "8000:8000"
-    command: ["python", "upload_server.py"]
+    command: ["python", "-m", "src.data_loader_service"]
 
   adminer:
     image: adminer:latest
