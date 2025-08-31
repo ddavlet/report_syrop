@@ -90,7 +90,7 @@ def _get_param_presets(slug: str) -> dict[str, list]:
     if slug == "inactive_clients":
         return {
             "cutoff_days": [30, 60, 90, 120],
-            "start_date": ["Начало года", 90, 180, 365],
+            "start_date": ["year_start", 90, 180, 365],
         }
     if slug == "new_customers":
         return {
@@ -101,7 +101,7 @@ def _get_param_presets(slug: str) -> dict[str, list]:
             "min_orders": [1, 2, 3, 5],
             "period_days": [15, 30, 60 , 90, 180],
         }
-    if slug == "abc_items":
+    if slug == "abc_clients":
         return {
             "period_days": [15, 30, 60 , 90, 180],
         }
@@ -140,6 +140,9 @@ def _build_params_keyboard(slug: str, params: dict) -> InlineKeyboardMarkup:
         for v in values:
             is_selected = params.get(key) == v
             label = f"{v}"
+            if label == "year_start":
+                label = "Начало года"
+                v = datetime.now().replace(month=1, day=1)
             if isinstance(v, bool):
                 label = "✅ Да" if v else "🚫 Нет"
             if is_selected:

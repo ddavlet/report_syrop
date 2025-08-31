@@ -301,3 +301,112 @@ def upsert_sales_items_df_to_postgres(df: pd.DataFrame, pg_dsn: str, table: str 
                 chunk = out.iloc[start:end, :]
                 execute_values(cur, insert_sql, gen_rows(chunk), page_size=chunk_size)
                 start = end
+
+
+def delete_sales_from_postgres(order_ids: list, pg_dsn: str, table: str = "sales") -> None:
+    """
+    Delete sales records by order_id list.
+    This will also delete related sales_items due to CASCADE.
+    """
+    if not order_ids:
+        return
+
+    try:
+        from sqlalchemy import create_engine, text
+        import logging
+        logger = logging.getLogger(__name__)
+    except ImportError as e:
+        raise RuntimeError("Install: pip install sqlalchemy psycopg2-binary") from e
+
+    engine = create_engine(pg_dsn)
+
+    # Convert list to tuple for SQL IN clause
+    if len(order_ids) == 1:
+        placeholders = "(%s)"
+        params = order_ids
+    else:
+        placeholders = "(" + ",".join(["%s"] * len(order_ids)) + ")"
+        params = order_ids
+
+    delete_sql = f"DELETE FROM {table} WHERE order_id IN {placeholders}"
+
+    with engine.begin() as connection:
+        result = connection.execute(text(delete_sql), params)
+        logger.info(f"Deleted {len(order_ids)} unconfirmed sales records from {table}")
+
+
+def upsert_confirmed_sales_df_to_postgres(df: pd.DataFrame, pg_dsn: str, table: str = "sales", chunk_size: int = 5000) -> None:
+    """
+    Upsert only confirmed sales records and delete unconfirmed ones.
+    Expects df with columns: client, date, total_sum, price_type, order_id, confirmed
+    """
+    if df.empty:
+        return
+
+    # normalize dtypes/columns
+    _normalize_dtypes(df)
+    required = {"client", "date", "total_sum", "price_type", "order_id", "confirmed"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing required columns: {sorted(missing)}")
+
+    # Separate confirmed and unconfirmed records
+    confirmed_df = df[df["confirmed"] == True].copy()
+    unconfirmed_order_ids = df[df["confirmed"] == False]["order_id"].tolist()
+
+    # Delete unconfirmed records from database
+    if unconfirmed_order_ids:
+        delete_sales_from_postgres(unconfirmed_order_ids, pg_dsn, table)
+
+    # Process only confirmed records
+    if confirmed_df.empty:
+        return
+
+    # Remove confirmed column before processing
+    confirmed_df = confirmed_df.drop(columns=["confirmed"])
+
+    # convert datetime -> date for storage
+    confirmed_df["date"] = pd.to_datetime(confirmed_df["date"]).dt.date
+
+    try:
+        from sqlalchemy import create_engine
+        from psycopg2.extras import execute_values
+    except ImportError as e:
+        raise RuntimeError("Install: pip install sqlalchemy psycopg2-binary") from e
+
+    _ensure_sales_table(pg_dsn, table)
+
+    engine = create_engine(pg_dsn)
+
+    insert_sql = f"""
+        INSERT INTO {table} (order_id, client, date, total_sum, price_type)
+        VALUES %s
+        ON CONFLICT (order_id) DO UPDATE
+        SET client = EXCLUDED.client,
+            date = EXCLUDED.date,
+            total_sum = EXCLUDED.total_sum,
+            price_type = EXCLUDED.price_type
+    """
+
+    cols = ["order_id", "client", "date", "total_sum", "price_type"]
+
+    def gen_rows(chunk: pd.DataFrame):
+        for r in chunk.itertuples(index=False):
+            yield (
+                getattr(r, "order_id"),
+                getattr(r, "client"),
+                getattr(r, "date"),
+                float(getattr(r, "total_sum")),
+                getattr(r, "price_type"),
+            )
+
+    with engine.begin() as connection:
+        raw = connection.connection  # psycopg2 connection
+        with raw.cursor() as cur:
+            start = 0
+            n = len(confirmed_df)
+            while start < n:
+                end = min(start + chunk_size, n)
+                chunk = confirmed_df.iloc[start:end, :]
+                execute_values(cur, insert_sql, gen_rows(chunk), page_size=chunk_size)
+                start = end

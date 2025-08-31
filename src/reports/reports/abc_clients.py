@@ -25,7 +25,6 @@ class ABCItemsReport(BaseReport):
         # Получаем параметры
         period_days = self.params.get("period_days", 30)
         date_from = self.params.get("date_from")
-        date_to = self.params.get("date_to")
 
         # Загружаем данные
         df = load_sales_df()
@@ -33,7 +32,7 @@ class ABCItemsReport(BaseReport):
             return df
 
         # Фильтр по времени
-        if date_from is not None and date_to is not None:
+        if date_from is not None:
             # Проверяем, что даты не None и конвертируем их
             try:
                 start = pd.to_datetime(str(date_from))
@@ -52,13 +51,13 @@ class ABCItemsReport(BaseReport):
 
         # Группируем по клиентам и считаем выручку и количество заказов
         client_summary = df.groupby("client").agg({
-            "sum": "sum",           # Общая выручка клиента
+            "total_sum": "sum",           # Общая выручка клиента
             "order_id": "nunique"   # Количество уникальных заказов
         }).reset_index()
 
         # Переименовываем колонки для понятности
         client_summary = client_summary.rename(columns={
-            "sum": "total_revenue",
+            "total_sum": "total_revenue",
             "order_id": "orders_count"
         })
 

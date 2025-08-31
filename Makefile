@@ -39,11 +39,17 @@ install: venv
 	$(PIPV) install -r requirements.txt
 
 # --- Docker lifecycle ---
-up:
-	$(DOCKER_COMPOSE) up -d $(DB_SERVICE)
+up: build
+	$(DOCKER_COMPOSE) up -d
 
 down:
 	$(DOCKER_COMPOSE) down
+
+build:
+	$(DOCKER_COMPOSE) build
+
+stop:
+	$(DOCKER_COMPOSE) stop
 
 # --- Services ---
 bot: install
