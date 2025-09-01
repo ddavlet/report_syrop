@@ -1,0 +1,1 @@
+[{"id":"TEST-1","date":"2025-01-10","confirmed":true,"client":"Flip Tester","items":[{"id":"SKU-1","name":"Item 1","pcs":1,"price":100,"sum":100}],"total_sum":100,"price_type":"retail"},{"id":"TEST-2","date":"2025-01-10","confirmed":false,"client":"Flip Tester","items":[{"id":"SKU-2","name":"Item 2","pcs":2,"price":50,"sum":100}],"total_sum":100,"price_type":"retail"}]

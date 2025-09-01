@@ -78,6 +78,10 @@ async def handle_data_update(request):
 
                 # Load sales items data if available
                 if not sales_items_df.empty:
+                    # Ensure items exist in items table first
+                    _ensure_items_in_items_table(sales_items_df, settings.pg_dsn)
+
+                    # Then load sales items
                     upsert_sales_items_df_to_postgres(
                         sales_items_df,
                         settings.pg_dsn,
@@ -159,6 +163,10 @@ async def handle_load_json(request):
 
             # Load sales items data if available
             if not sales_items_df.empty:
+                # Ensure items exist in items table first
+                _ensure_items_in_items_table(sales_items_df, settings.pg_dsn)
+
+                # Then load sales items
                 upsert_sales_items_df_to_postgres(
                     sales_items_df,
                     settings.pg_dsn,
@@ -199,7 +207,7 @@ def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """Normalize DataFrame columns and data types"""
     # Ensure required columns exist
     if "order_id" not in df.columns and "id" in df.columns:
-        df["order_id"] = df["id"]
+        df["order_id"] = df["id"].astype(str)
 
     # Ensure all required columns exist
     required_columns = ["client", "date", "total_sum", "price_type", "order_id", "confirmed"]
@@ -212,10 +220,15 @@ def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             else:
                 df[col] = ""
 
+    # Handle client_id if present
+    if "client_id" in df.columns:
+        df["client_id"] = df["client_id"].astype(str)
+        required_columns.append("client_id")
+
     # Convert data types
-    df["client"] = df["client"].astype(str).str.strip()
+    df["client"] = df["client"].astype(str)
     df["date"] = pd.to_datetime(df["date"])
-    df["total_sum"] = df["total_sum"].astype(float)
+    df["total_sum"] = pd.to_numeric(df["total_sum"], errors="coerce")
     df["price_type"] = df["price_type"].astype(str)
     df["order_id"] = df["order_id"].astype(str)
     df["confirmed"] = df["confirmed"].astype(bool)
@@ -223,10 +236,14 @@ def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return df[required_columns]
 
 def _extract_sales_items(sales_data: List[Dict[str, Any]]) -> pd.DataFrame:
-    """Extract sales items from sales data and convert to DataFrame"""
+    """Extract sales items from confirmed sales only and convert to DataFrame"""
     items_rows = []
 
     for sale in sales_data:
+        # Only process items for confirmed sales
+        if not sale.get("confirmed", False):
+            continue
+
         order_id = sale.get("id")
         if not order_id:
             continue
@@ -257,6 +274,55 @@ def _extract_sales_items(sales_data: List[Dict[str, Any]]) -> pd.DataFrame:
         df["total"] = pd.to_numeric(df["total"], errors="coerce")
 
     return df
+
+def _ensure_items_in_items_table(items_df: pd.DataFrame, pg_dsn: str) -> None:
+    """Ensure all items from sales items exist in the items table"""
+    if items_df.empty:
+        return
+
+    try:
+        from sqlalchemy import create_engine, text
+    except ImportError as e:
+        logger.warning(f"Could not ensure items table: {e}")
+        return
+
+    engine = create_engine(pg_dsn)
+
+    # Get unique SKUs from the items dataframe
+    unique_skus = items_df["sku"].dropna().unique()
+
+    if len(unique_skus) == 0:
+        return
+
+    # Create items table if it doesn't exist
+    from src.core.data_loader import _ensure_items_table
+    _ensure_items_table(pg_dsn, "items")
+
+    # Check which items already exist in the database
+    with engine.connect() as conn:
+        existing_items = set()
+        placeholders = ",".join([f":sku_{i}" for i in range(len(unique_skus))])
+        query = text(f"SELECT sku FROM items WHERE sku IN ({placeholders})")
+        params = {f"sku_{i}": sku for i, sku in enumerate(unique_skus)}
+        result = conn.execute(query, params)
+        existing_items = {row[0] for row in result}
+
+    # Create new items for those that don't exist
+    new_items = set(unique_skus) - existing_items
+    if new_items:
+        with engine.begin() as conn:
+            for sku in new_items:
+                # Find the product name for this SKU
+                product_name = items_df[items_df["sku"] == sku]["product_name"].iloc[0] if not items_df[items_df["sku"] == sku].empty else str(sku)
+
+                insert_query = text("""
+                    INSERT INTO items (sku, product_name, is_active)
+                    VALUES (:sku, :product_name, TRUE)
+                    ON CONFLICT (sku) DO NOTHING
+                """)
+                conn.execute(insert_query, {"sku": sku, "product_name": product_name})
+
+        logger.info(f"Created {len(new_items)} new items in items table")
 
 async def _save_backup_json(data: List[Dict[str, Any]]) -> None:
     """Save data as backup JSON file"""
@@ -318,12 +384,21 @@ async def main():
 
     if settings.pg_dsn:
         logger.info(f"🗄️  PostgreSQL configured: {settings.pg_table}")
-        # Ensure both tables exist
+        # Ensure all required tables exist
         try:
+            from src.core.data_loader import (
+                _ensure_clients_table,
+                _ensure_items_table,
+                _ensure_sales_table,
+                _ensure_sales_items_table
+            )
+            _ensure_clients_table(settings.pg_dsn, "clients")
+            _ensure_items_table(settings.pg_dsn, "items")
+            _ensure_sales_table(settings.pg_dsn, settings.pg_table)
             _ensure_sales_items_table(settings.pg_dsn, "sales_items")
-            logger.info("✅ sales_items table ensured")
+            logger.info("✅ All PostgreSQL tables ensured")
         except Exception as e:
-            logger.warning(f"⚠️  Could not ensure sales_items table: {e}")
+            logger.warning(f"⚠️  Could not ensure PostgreSQL tables: {e}")
     else:
         logger.warning("⚠️  PostgreSQL not configured - data will only be saved to JSON")
 

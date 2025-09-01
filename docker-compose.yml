@@ -30,7 +30,6 @@ services:
       PG_DSN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       # optional: telegram bot config
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
       BOT_ALLOWED_USER_IDS: ${BOT_ALLOWED_USER_IDS}
       # optional: fallback sales json path if you ever use DATA_BACKEND=json
       SALES_JSON_PATH: ${SALES_JSON_PATH}
@@ -56,10 +55,7 @@ services:
       # core app config
       DATA_BACKEND: postgres
       PG_DSN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      PG_TABLE: sales
-      # optional: telegram bot config for notifications
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      # PG_TABLE: sales
       PYTHONPATH: /app
     depends_on:
       db:

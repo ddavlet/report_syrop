@@ -15,21 +15,32 @@ APP_SERVICE ?= app
 DB_SERVICE ?= db
 DATA_LOADER_SERVICE ?= data_loader
 
-.PHONY: help venv install up down clean clean-venv clean-volumes rebuild recreate bot data-loader
+.PHONY: help venv install up down clean clean-venv clean-volumes rebuild recreate bot data-loader setup-db \
+compose-up compose-down compose-logs compose-ps compose-app compose-data-loader compose-db compose-adminer init-db-docker stop
 
 help:
 	@echo "Commands:"
 	@echo "  make venv                 - Create virtual environment"
 	@echo "  make install              - Install requirements into venv"
-	@echo "  make up                   - Start Postgres via docker compose"
+	@echo "  make up                   - Build images and start all services (detached)"
 	@echo "  make down                 - Stop all services"
 	@echo "  make bot                  - Run Telegram bot locally"
 	@echo "  make data-loader          - Run data loader service locally"
+	@echo "  make setup-db             - Setup database tables (requires PG_DSN)"
 	@echo "  make clean                - Remove caches and temporary files"
 	@echo "  make clean-venv           - Remove virtual environment"
 	@echo "  make clean-volumes        - Stop and remove containers and volumes"
 	@echo "  make rebuild              - Force rebuild images (no cache)"
 	@echo "  make recreate             - Rebuild containers and start services"
+	@echo "  make compose-up           - Start all Docker services (detached)"
+	@echo "  make compose-down         - Stop and remove Docker services"
+	@echo "  make compose-logs         - Tail logs for all Docker services"
+	@echo "  make compose-ps           - Show Docker services status"
+	@echo "  make compose-app          - Start only Telegram bot (container)"
+	@echo "  make compose-data-loader  - Start only data loader API (container)"
+	@echo "  make compose-db           - Start only PostgreSQL (container)"
+	@echo "  make compose-adminer      - Start Adminer UI (container)"
+	@echo "  make init-db-docker       - Initialize DB schema inside the app container"
 
 venv:
 	$(PY) -m venv $(VENVDIR)
@@ -51,6 +62,35 @@ build:
 stop:
 	$(DOCKER_COMPOSE) stop
 
+# --- Docker Compose helpers ---
+compose-up:
+	$(DOCKER_COMPOSE) up -d
+
+compose-down:
+	$(DOCKER_COMPOSE) down
+
+compose-logs:
+	$(DOCKER_COMPOSE) logs -f
+
+compose-ps:
+	$(DOCKER_COMPOSE) ps
+
+compose-app:
+	$(DOCKER_COMPOSE) up -d app
+
+compose-data-loader:
+	$(DOCKER_COMPOSE) up -d data_loader
+
+compose-db:
+	$(DOCKER_COMPOSE) up -d db
+
+compose-adminer:
+	$(DOCKER_COMPOSE) up -d adminer
+
+# --- Initialize DB schema inside container ---
+init-db-docker:
+	$(DOCKER_COMPOSE) exec app sh -lc 'python scripts/setup_database.py --pg-dsn "$$PG_DSN"'
+
 # --- Services ---
 bot: install
 	$(PYTHON) -m src.bot
@@ -58,6 +98,20 @@ bot: install
 data-loader: install
 	$(PYTHON) -m src.data_loader_service
 
+load-data:
+	curl -X POST http://localhost:5500/update \
+     -H "Content-Type: application/json" \
+     -d @data/123.json
+
+# --- Database ---
+setup-db: install
+	@echo "Usage: make setup-db PG_DSN='postgresql://user:pass@host:port/db'"
+	@if [ -z "$(PG_DSN)" ]; then \
+		echo "Error: PG_DSN environment variable is required"; \
+		echo "Example: make setup-db PG_DSN='postgresql://user:pass@localhost:5432/sales_db'"; \
+		exit 1; \
+	fi
+	$(PYTHON) scripts/setup_database.py --pg-dsn "$(PG_DSN)"
 
 
 # --- Cleanup ---
