@@ -3,10 +3,10 @@ from .core import (
     ReportRegistry,
     RunContext,
     register_report,
-    tg_send_file,
 )
 from .data_loader import (
     load_sales_df,
+    load_sales_items_df,
     upsert_sales_df_to_postgres,
     upsert_sales_items_df_to_postgres,
 )
@@ -16,8 +16,8 @@ __all__ = [
     "ReportRegistry",
     "RunContext",
     "register_report",
-    "tg_send_file",
     "load_sales_df",
+    "load_sales_items_df",
     "upsert_sales_df_to_postgres",
     "upsert_sales_items_df_to_postgres",
 ]

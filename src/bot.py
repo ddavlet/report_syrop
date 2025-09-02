@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from datetime import datetime
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
@@ -90,7 +91,7 @@ def _get_param_presets(slug: str) -> dict[str, list]:
     if slug == "inactive_clients":
         return {
             "cutoff_days": [30, 60, 90, 120],
-            "start_date": ["year_start", 90, 180, 365],
+            "start_date": [f"{datetime.now().year}-01-01", 90, 180, 365],
         }
     if slug == "new_customers":
         return {
@@ -140,16 +141,21 @@ def _build_params_keyboard(slug: str, params: dict) -> InlineKeyboardMarkup:
         for v in values:
             is_selected = params.get(key) == v
             label = f"{v}"
-            if label == "year_start":
-                label = "Начало года"
-                v = datetime.now().replace(month=1, day=1)
+            # if label == f"{datetime.now().year}-01-01":
+            #     label = "Начало года"
+            #     v = f"{datetime.now().year}-01-01"
             if isinstance(v, bool):
                 label = "✅ Да" if v else "🚫 Нет"
             if is_selected:
                 label = f"[{label}]"
+            # Convert datetime objects to strings for JSON serialization
+            serializable_v = v
+            if isinstance(v, datetime):
+                serializable_v = v.isoformat()
+
             line.append(InlineKeyboardButton(
                 text=label,
-                callback_data=f"set:{slug}:{key}:{json.dumps(v)}"
+                callback_data=f"set:{slug}:{key}:{json.dumps(serializable_v)}"
             ))
         rows.append(line)
 
@@ -199,7 +205,7 @@ async def cmd_start(m: Message):
         ]
     )
     await m.answer(
-        "👋 Привет! Я бот для генерации отчётов по продажам.\n\n"
+        "👋 Привет! Я бот для генерации отчётов OK Syrop.\n\n"
         "Нажмите кнопку ниже, чтобы выбрать отчёт.",
         reply_markup=kb
     )
@@ -266,6 +272,12 @@ async def cb_set_param(c: CallbackQuery):
 
     try:
         value = json.loads(raw)
+        # Convert ISO datetime strings back to datetime objects
+        if isinstance(value, str) and value.count('-') >= 2 and 'T' in value:
+            try:
+                value = datetime.fromisoformat(value.replace('Z', '+00:00'))
+            except ValueError:
+                pass  # Keep as string if parsing fails
     except Exception:
         value = raw
 

@@ -43,7 +43,101 @@ class BaseReport:
     header_labels: dict[str, str] = {}  # отображаемые имена колонок (ключи — имена колонок df)
 
     def __init__(self, params: Optional[Dict[str, Any]] = None):
-        self.params = params or {}
+        self.params = self._serialize_params(params or {})
+
+    def _serialize_params(self, raw_params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Serialize and normalize parameters to ensure consistent types.
+        This method can be overridden by specific reports for custom parameter handling.
+        """
+        serialized = {}
+
+        for key, value in raw_params.items():
+            if value is None:
+                serialized[key] = None
+            elif key == "start_date":
+                serialized[key] = self._serialize_start_date(value)
+            elif key in ["date_from", "date_to"]:
+                serialized[key] = self._serialize_date(value)
+            elif key in ["period_days", "cutoff_days", "min_orders"]:
+                serialized[key] = self._serialize_int(value)
+            elif key == "dim":
+                serialized[key] = self._serialize_string(value)
+            else:
+                raise ValueError(f"Unknown parameter: {key}")
+
+        return serialized
+
+    def _serialize_start_date(self, value: Any) -> Optional[datetime]:
+        """Convert various start_date formats to datetime object."""
+        if value is None:
+            return None
+
+        if isinstance(value, datetime):
+            return value
+
+        if isinstance(value, str):
+            # Handle special string values
+            if value == "year_start":
+                return datetime.now().replace(month=1, day=1)
+            elif value.isdigit():
+                # If it's a number of days, convert to datetime
+                days = int(value)
+                return datetime.now() - pd.Timedelta(days=days)
+            else:
+                # Try to parse as date string
+                try:
+                    return datetime.strptime(value, "%Y-%m-%d")
+                except ValueError:
+                    # If parsing fails, return None
+                    return None
+
+        if isinstance(value, (int, float)):
+            # If it's a number, treat as days ago
+            days = int(value)
+            return datetime.now() - pd.Timedelta(days=days)
+
+        return None
+
+    def _serialize_date(self, value: Any) -> Optional[str]:
+        """Convert various date formats to YYYY-MM-DD string."""
+        if value is None:
+            return None
+
+        if isinstance(value, str):
+            # If it's already a string, try to validate it
+            try:
+                datetime.strptime(value, "%Y-%m-%d")
+                return value
+            except ValueError:
+                return None
+
+        if isinstance(value, datetime):
+            return value.strftime("%Y-%m-%d")
+
+        if isinstance(value, (int, float)):
+            # If it's a number, treat as days ago
+            days = int(value)
+            date_obj = datetime.now() - pd.Timedelta(days=days)
+            return date_obj.strftime("%Y-%m-%d")
+
+        return None
+
+    def _serialize_int(self, value: Any) -> Optional[int]:
+        """Convert value to integer."""
+        if value is None:
+            return None
+
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return None
+
+    def _serialize_string(self, value: Any) -> Optional[str]:
+        """Convert value to string."""
+        if value is None:
+            return None
+        return str(value)
 
     def compute(self) -> pd.DataFrame:
         """Вернуть DataFrame — переопределяется в отчёте."""
@@ -89,13 +183,3 @@ class BaseReport:
                 ws.write(0, len(df_out.columns) + 1, title)
         return out_path
 
-
-# ===== Телеграм, очень просто =====
-def tg_send_file(bot_token: str, chat_id: str, file_path: Path, caption: str = "") -> None:
-    if not bot_token or not chat_id:
-        raise ValueError("TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is empty")
-    url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
-    with open(file_path, "rb") as f:
-        r = requests.post(url, data={"chat_id": chat_id, "caption": caption},
-                          files={"document": (file_path.name, f)}, timeout=120)
-    r.raise_for_status()

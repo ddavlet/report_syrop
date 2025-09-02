@@ -26,12 +26,10 @@ services:
       - ./out:/app/out
     environment:
       # core app config
-      DATA_BACKEND: postgres
       PG_DSN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       # optional: telegram bot config
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       BOT_ALLOWED_USER_IDS: ${BOT_ALLOWED_USER_IDS}
-      # optional: fallback sales json path if you ever use DATA_BACKEND=json
       SALES_JSON_PATH: ${SALES_JSON_PATH}
       PYTHONPATH: /app
     depends_on:
@@ -39,28 +37,27 @@ services:
         condition: service_healthy
     command: ["python", "-m", "src.bot"]
 
-  data_loader:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: report_syrop_data_loader:latest
-    container_name: report_syrop_data_loader
-    working_dir: /app
-    volumes:
-      - ./:/app
-      - ./data:/app/data
-    ports:
-      - "5500:8000"
-    environment:
-      # core app config
-      DATA_BACKEND: postgres
-      PG_DSN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      # PG_TABLE: sales
-      PYTHONPATH: /app
-    depends_on:
-      db:
-        condition: service_healthy
-    command: ["python", "-m", "src.data_loader_service"]
+  # data_loader:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   image: report_syrop_data_loader:latest
+  #   container_name: report_syrop_data_loader
+  #   working_dir: /app
+  #   volumes:
+  #     - ./:/app
+  #     - ./data:/app/data
+  #   ports:
+  #     - "5500:8000"
+  #   environment:
+  #     # core app config
+  #     PG_DSN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+  #     # PG_TABLE: sales
+  #     PYTHONPATH: /app
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #   command: ["python", "-m", "src.data_loader_service"]
 
   adminer:
     image: adminer:latest

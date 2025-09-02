@@ -34,10 +34,9 @@ Create a `.env` file with your configuration:
 # Telegram Bot Configuration
 TELEGRAM_BOT_TOKEN=your_bot_token_here
 TELEGRAM_CHAT_ID=your_chat_id_here
-BOT_ALLOWED_USER_IDS=123456,789012  # Optional: restrict access to specific users
+BOT_ALLOWED_USER_IDS=123456,789012
 
 # Data Configuration
-DATA_BACKEND=postgres  # json, fake, or postgres
 SALES_JSON_PATH=data/sales.json
 
 # PostgreSQL
@@ -110,7 +109,7 @@ Content-Type: application/json
 ### Health Check
 
 ```bash
-GET http://localhost:8000/health
+GET http://localhost:8000/health (Forwarded to port 5500)
 ```
 
 ## Data Flow

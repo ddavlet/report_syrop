@@ -18,15 +18,11 @@ class InactiveClientsReport(BaseReport):
     }
 
     def compute(self) -> pd.DataFrame:
-        cutoff_days = int(self.params.get("cutoff_days", 60))
-        start_date = self.params.get("start_date")
-        # опционально: можно передать backend через params: {"backend": "fake"}
-        backend = self.params.get("backend")
+        # Parameters are now serialized by BaseReport._serialize_params()
+        cutoff_days = self.params.get("cutoff_days")
+        start_date = self.params.get("start_date")  # Already a datetime object or None
 
-        if start_date and start_date < cutoff_days:
-            raise ValueError(f"start_date={start_date} должно быть больше cutoff_days={cutoff_days}")
-
-        df = load_sales_df(backend=backend, start_date=start_date)
+        df = load_sales_df(start_date=start_date)
         if df.empty:
             return df
 

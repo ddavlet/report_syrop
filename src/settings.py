@@ -14,13 +14,12 @@ OUT_DIR.mkdir(exist_ok=True)
 @dataclass(frozen=True)
 class Settings:
     sales_json_path: Path = Path(os.getenv("SALES_JSON_PATH", BASE_DIR / "data/sales.json"))
-    data_backend: str = os.getenv("DATA_BACKEND", "json").lower()  # json | fake | postgres
 
-    # Postgres (когда подключишь)
+    # Postgres
     pg_dsn: str = os.getenv("PG_DSN", "")
     pg_table: str = os.getenv("PG_TABLE", "sales")
 
-    # бот (если нужно)
+    # Телеграм бот
     telegram_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
     telegram_allowed_user_ids: str = os.getenv("BOT_ALLOWED_USER_IDS", "")

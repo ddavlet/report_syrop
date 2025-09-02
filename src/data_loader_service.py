@@ -13,7 +13,7 @@ from aiohttp import web, ClientSession
 from typing import List, Dict, Any
 
 from src.settings import settings
-from src.core.data_loader import upsert_confirmed_sales_df_to_postgres, upsert_sales_items_df_to_postgres, _ensure_sales_items_table
+from src.core.data_loader import upsert_confirmed_sales_df_to_postgres, upsert_sales_items_df_to_postgres, _check_sales_items_table
 import pandas as pd
 
 # Configure logging
@@ -61,7 +61,7 @@ async def handle_data_update(request):
         df = _normalize_dataframe(df)
 
         # Extract sales items data
-        sales_items_df = _extract_sales_items(data)
+        sales_items_df = _extract_sales_items(df)
 
         # Load to PostgreSQL
         if settings.pg_dsn:
@@ -152,7 +152,7 @@ async def handle_load_json(request):
         df = _normalize_dataframe(df)
 
         # Extract sales items data
-        sales_items_df = _extract_sales_items(data)
+        sales_items_df = _extract_sales_items(df)
 
         if settings.pg_dsn:
             # Load sales data
@@ -210,22 +210,13 @@ def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         df["order_id"] = df["id"].astype(str)
 
     # Ensure all required columns exist
-    required_columns = ["client", "date", "total_sum", "price_type", "order_id", "confirmed"]
+    required_columns = ["client", "client_id", "date", "total_sum", "price_type", "order_id", "confirmed"]
     for col in required_columns:
         if col not in df.columns:
-            if col == "price_type":
-                df[col] = "unknown"
-            elif col == "confirmed":
-                df[col] = False  # Default to False if not specified
-            else:
-                df[col] = ""
+            raise ValueError(f"Missing required column: {col}")
 
-    # Handle client_id if present
-    if "client_id" in df.columns:
-        df["client_id"] = df["client_id"].astype(str)
-        required_columns.append("client_id")
-
-    # Convert data types
+    # Data types
+    df["client_id"] = df["client_id"].astype(str)
     df["client"] = df["client"].astype(str)
     df["date"] = pd.to_datetime(df["date"])
     df["total_sum"] = pd.to_numeric(df["total_sum"], errors="coerce")
@@ -235,16 +226,16 @@ def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     return df[required_columns]
 
-def _extract_sales_items(sales_data: List[Dict[str, Any]]) -> pd.DataFrame:
+def _extract_sales_items(sales_data: pd.DataFrame) -> pd.DataFrame:
     """Extract sales items from confirmed sales only and convert to DataFrame"""
     items_rows = []
 
-    for sale in sales_data:
+    for sale in sales_data.to_dict('records'): # Iterate over normalized DataFrame
         # Only process items for confirmed sales
-        if not sale.get("confirmed", False):
+        if not sale.get("confirmed"):
             continue
 
-        order_id = sale.get("id")
+        order_id = sale.get("order_id") # Use order_id instead of id
         if not order_id:
             continue
 
@@ -276,15 +267,21 @@ def _extract_sales_items(sales_data: List[Dict[str, Any]]) -> pd.DataFrame:
     return df
 
 def _ensure_items_in_items_table(items_df: pd.DataFrame, pg_dsn: str) -> None:
-    """Ensure all items from sales items exist in the items table"""
+    """
+    Ensure all items from the DataFrame exist in the items table.
+    Creates items with basic info if they don't exist.
+    """
     if items_df.empty:
         return
 
     try:
         from sqlalchemy import create_engine, text
     except ImportError as e:
-        logger.warning(f"Could not ensure items table: {e}")
-        return
+        raise RuntimeError("Install: pip install sqlalchemy psycopg2-binary") from e
+
+    # Check that items table exists
+    from src.core.data_loader import _check_items_table
+    _check_items_table(pg_dsn, "items")
 
     engine = create_engine(pg_dsn)
 
@@ -387,15 +384,15 @@ async def main():
         # Ensure all required tables exist
         try:
             from src.core.data_loader import (
-                _ensure_clients_table,
-                _ensure_items_table,
-                _ensure_sales_table,
-                _ensure_sales_items_table
+                _check_clients_table,
+                _check_items_table,
+                _check_sales_table,
+                _check_sales_items_table
             )
-            _ensure_clients_table(settings.pg_dsn, "clients")
-            _ensure_items_table(settings.pg_dsn, "items")
-            _ensure_sales_table(settings.pg_dsn, settings.pg_table)
-            _ensure_sales_items_table(settings.pg_dsn, "sales_items")
+            _check_clients_table(settings.pg_dsn, "clients")
+            _check_items_table(settings.pg_dsn, "items")
+            _check_sales_table(settings.pg_dsn, settings.pg_table)
+            _check_sales_items_table(settings.pg_dsn, "sales_items")
             logger.info("✅ All PostgreSQL tables ensured")
         except Exception as e:
             logger.warning(f"⚠️  Could not ensure PostgreSQL tables: {e}")

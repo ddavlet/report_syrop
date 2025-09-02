@@ -22,8 +22,8 @@ class ABCItemsReport(BaseReport):
         """
         ABC-анализ клиентов по выручке.
         """
-        # Получаем параметры
-        period_days = self.params.get("period_days", 30)
+        # Parameters are now serialized by BaseReport._serialize_params()
+        period_days = self.params.get("period_days")
         date_from = self.params.get("date_from")
 
         # Загружаем данные
@@ -33,16 +33,9 @@ class ABCItemsReport(BaseReport):
 
         # Фильтр по времени
         if date_from is not None:
-            # Проверяем, что даты не None и конвертируем их
-            try:
-                start = pd.to_datetime(str(date_from))
-                end = pd.to_datetime(str(date_to)) + pd.Timedelta(days=1)
-                df = df[(df["date"] >= start) & (df["date"] < end)]
-            except (ValueError, TypeError):
-                # Если не удалось конвертировать даты, используем период по умолчанию
-                end = pd.Timestamp.now()
-                start = end - pd.Timedelta(days=period_days)
-                df = df[(df["date"] >= start) & (df["date"] < end)]
+            start = pd.to_datetime(date_from)
+            end = pd.Timestamp.now()
+            df = df[(df["date"] >= start) & (df["date"] < end)]
         else:
             # Используем период по умолчанию
             end = pd.Timestamp.now()

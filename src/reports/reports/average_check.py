@@ -19,12 +19,11 @@ class AverageCheckReport(BaseReport):
     }
 
     def compute(self) -> pd.DataFrame:
-        # Параметры:
+        # Parameters are now serialized by BaseReport._serialize_params()
         #   dim: str in {"overall","client","month","client_month"}
-        #       дефолт — "month"
         #   period_days: Optional[int] — если задан, фильтруем последние N дней
         #   date_from/date_to: Optional[str YYYY-MM-DD] — если заданы оба, фильтруем точный интервал
-        dim = (self.params.get("dim") or "month").lower()
+        dim = self.params.get("dim")
         period_days = self.params.get("period_days")
         date_from = self.params.get("date_from")
         date_to = self.params.get("date_to")
@@ -35,18 +34,13 @@ class AverageCheckReport(BaseReport):
 
         # Фильтр по времени
         if date_from and date_to:
-            start = pd.to_datetime(str(date_from))
-            end = pd.to_datetime(str(date_to)) + pd.Timedelta(days=1)
+            start = pd.to_datetime(date_from)
+            end = pd.to_datetime(date_to) + pd.Timedelta(days=1)
             df = df[(df["date"] >= start) & (df["date"] < end)]
         elif period_days is not None:
-            try:
-                days = int(period_days)
-            except (TypeError, ValueError):
-                days = None
-            if days is not None and days > 0:
-                end = pd.Timestamp.now()
-                start = end - pd.Timedelta(days=days)
-                df = df[(df["date"] >= start) & (df["date"] < end)]
+            end = pd.Timestamp.now()
+            start = end - pd.Timedelta(days=period_days)
+            df = df[(df["date"] >= start) & (df["date"] < end)]
 
         # добавим месяц
         df["month"] = df["date"].dt.to_period("M").dt.to_timestamp()

@@ -18,10 +18,10 @@ class NewCustomersReport(BaseReport):
     }
 
     def compute(self) -> pd.DataFrame:
-        # Параметры:
+        # Parameters are now serialized by BaseReport._serialize_params()
         #   period_days: int (по умолчанию 30) — берём клиентов, у кого первый заказ в последние N дней
         #   date_from/date_to (YYYY-MM-DD) — если заданы, используют точный интервал
-        period_days = int(self.params.get("period_days", 30))
+        period_days = self.params.get("period_days")
         date_from = self.params.get("date_from")
         date_to = self.params.get("date_to")
 
@@ -40,11 +40,11 @@ class NewCustomersReport(BaseReport):
 
         # границы периода
         if date_from and date_to:
-            start = datetime.strptime(date_from, "%Y-%m-%d")
-            end = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)  # включительно
+            start = pd.to_datetime(date_from)
+            end = pd.to_datetime(date_to) + pd.Timedelta(days=1)  # включительно
         else:
-            end = datetime.now()
-            start = end - timedelta(days=period_days)
+            end = pd.Timestamp.now()
+            start = end - pd.Timedelta(days=period_days)
 
         # фильтр: первые покупки в окне
         newcomers = firsts[(firsts["first_purchase"] >= start) & (firsts["first_purchase"] < end)].copy()
@@ -53,7 +53,7 @@ class NewCustomersReport(BaseReport):
         # удобные агрегаты (можно выгрузить в отчёт как справочную инфу)
         # но основной результат — список клиентов
         newcomers["period_start"] = start.date()
-        newcomers["period_end"] = (end - timedelta(days=1)).date()
+        newcomers["period_end"] = (end - pd.Timedelta(days=1)).date()
         newcomers["first_order_sum"] = newcomers["first_order_sum"].round(2)
 
         return newcomers[[

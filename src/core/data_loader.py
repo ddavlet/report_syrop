@@ -1,75 +1,40 @@
 # data_loader.py
 from __future__ import annotations
 
-import json
-import random
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Literal, Optional
+from datetime import datetime
+from typing import Optional
 
 import pandas as pd
 
 from src.settings import settings
 
-Backend = Literal["json", "fake", "postgres"]
 
-
-def load_sales_df(backend: Optional[Backend] = None, start_date: Optional[datetime] = None) -> pd.DataFrame:
+def load_sales_items_df(start_date: Optional[datetime] = None) -> pd.DataFrame:
     """
-    Универсальный загрузчик данных о продажах.
+    Загрузчик данных о позициях заказов (item-level) из PostgreSQL.
+    Возвращает DataFrame с колонками:
+        client(str), date(datetime64), order_id(str), item(str), line_total(float)
+    """
+    return _load_items_from_postgres(
+        pg_dsn=getattr(settings, "pg_dsn", ""),
+        start_date=start_date,
+    )
+
+
+def load_sales_df(start_date: Optional[datetime] = None) -> pd.DataFrame:
+    """
+    Загрузчик данных о продажах из PostgreSQL.
     Возвращает DataFrame с колонками:
         client(str), date(datetime64), total_sum(float), price_type(str), order_id(str)
-
-    backend:
-        - "json" (по умолчанию из settings.DATA_BACKEND)
-        - "fake"
-        - "postgres"
     """
-    backend = (backend or getattr(settings, "data_backend", "json")).lower()
-
-    if backend == "json":
-        return _load_from_json(getattr(settings, "sales_json_path", Path("data/sales.json")), start_date=start_date)
-    elif backend == "fake":
-        return _load_fake_data()
-    elif backend == "postgres":
-        return _load_from_postgres(
-            pg_dsn=getattr(settings, "pg_dsn", ""),
-            table=getattr(settings, "pg_table", "sales"),
-            start_date=start_date,
-        )
-    else:
-        raise ValueError(f"Unknown DATA_BACKEND='{backend}'")
+    return _load_from_postgres(
+        pg_dsn=getattr(settings, "pg_dsn", ""),
+        table=getattr(settings, "pg_table", "sales"),
+        start_date=start_date,
+    )
 
 
-# ---------------- JSON ----------------
-def _load_from_json(path: Path, start_date: Optional[datetime] = None) -> pd.DataFrame:
-    """
-    Ожидаемый формат JSON-файла:
-    [
-      {"client":"A", "client_id":"0001", "date":"YYYY-MM-DD", "total_sum": 123.45, "price_type":"retail", "id":"ORD-1"},
-      ...
-    ]
-    """
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(f"sales json not found: {path}")
 
-    data = json.loads(path.read_text(encoding="utf-8"))
-    rows = []
-    for o in data:
-        rows.append({
-            "client": str(o["client"]).strip(),
-            "client_id": str(o.get("client_id", "")).strip(),
-            "date": datetime.strptime(o["date"], "%Y-%m-%d"),
-            "total_sum": float(o["total_sum"]),
-            "price_type": str(o.get("price_type", "")),
-            "order_id": str(o.get("id") or o.get("order_id") or ""),
-        })
-    if start_date:
-        rows = [r for r in rows if r["date"] >= start_date]
-    df = pd.DataFrame(rows)
-    _normalize_dtypes(df)
-    return df
 
 
 # ---------------- POSTGRES ----------------
@@ -134,36 +99,73 @@ def _load_from_postgres(pg_dsn: str, table: str, start_date: Optional[datetime] 
     return df
 
 
-# ---------------- FAKE DATA ----------------
-def _load_fake_data() -> pd.DataFrame:
-    """Generate fake sales data for testing"""
-    random.seed(42)
 
-    # Generate fake data
-    clients = ["Client A", "Client B", "Client C", "Client D", "Client E"]
-    price_types = ["retail", "wholesale", "discount"]
 
+
+# ---------------- ITEMS FROM POSTGRES ----------------
+def _load_items_from_postgres(pg_dsn: str, start_date: Optional[datetime] = None) -> pd.DataFrame:
+    """
+    Читает данные о позициях заказов из Postgres.
+    Требуются пакеты:
+        pip install sqlalchemy psycopg2-binary
+    Требуемые таблицы:
+        sales (order_id, client_id, date, total_sum, price_type)
+        sales_items (order_id, line_no, sku, product_name, qty, price, total)
+        clients (client_id, client_name)
+    """
+    if not pg_dsn:
+        raise ValueError("PG_DSN is empty in settings")
+
+    try:
+        from sqlalchemy import create_engine, text
+    except ImportError as e:
+        raise RuntimeError("Install: pip install sqlalchemy psycopg2-binary") from e
+
+    engine = create_engine(pg_dsn)
+
+    # Build query conditionally based on whether start_date is provided
+    if start_date:
+        query = text("""
+            SELECT c.client_name as client, s.date, s.order_id,
+                   COALESCE(i.product_name, i.sku) AS item, i.total AS line_total
+            FROM sales s
+            JOIN sales_items i ON i.order_id = s.order_id
+            JOIN clients c ON s.client_id = c.client_id
+            WHERE s.date >= :start_date
+            ORDER BY s.date DESC
+        """)
+        with engine.connect() as conn:
+            result = conn.execute(query, {"start_date": start_date})
+    else:
+        query = text("""
+            SELECT c.client_name as client, s.date, s.order_id,
+                   COALESCE(i.product_name, i.sku) AS item, i.total AS line_total
+            FROM sales s
+            JOIN sales_items i ON i.order_id = s.order_id
+            JOIN clients c ON s.client_id = c.client_id
+            ORDER BY s.date DESC
+        """)
+        with engine.connect() as conn:
+            result = conn.execute(query)
+
+    # Convert to DataFrame
     rows = []
-    base_date = datetime.now() - timedelta(days=30)
-
-    for i in range(100):
-        date = base_date + timedelta(days=random.randint(0, 30))
-        client = random.choice(clients)
-        total_sum = round(random.uniform(10.0, 1000.0), 2)
-        price_type = random.choice(price_types)
-        order_id = f"ORD-{i+1:03d}"
-
+    for row in result:
         rows.append({
-            "client": client,
-            "date": date,
-            "total_sum": total_sum,
-            "price_type": price_type,
-            "order_id": order_id,
+            "client": row[0],
+            "date": row[1],
+            "order_id": row[2],
+            "item": row[3],
+            "line_total": float(row[4]),
         })
 
     df = pd.DataFrame(rows)
-    _normalize_dtypes(df)
+    if not df.empty:
+        _normalize_dtypes(df)
     return df
+
+
+
 
 
 # ---------------- UTILITIES ----------------
@@ -185,79 +187,65 @@ def _normalize_dtypes(df: pd.DataFrame) -> None:
     if "order_id" in df:
         df["order_id"] = df["order_id"].astype(str)
 
-def _ensure_clients_table(pg_dsn: str, table: str = "clients") -> None:
-    """Create the clients table if it doesn't exist. client_id is the primary key."""
+def _check_clients_table(pg_dsn: str, table: str = "clients") -> None:
+    """Check if the clients table exists, raise error if not."""
     try:
         from sqlalchemy import create_engine, text
     except ImportError as e:
         raise RuntimeError("Install: pip install sqlalchemy psycopg2-binary") from e
 
-    ddl = text(f"""
-    CREATE TABLE IF NOT EXISTS {table} (
-        client_id   TEXT PRIMARY KEY,
-        client_name TEXT NOT NULL,
-        email       TEXT,
-        phone       TEXT,
-        address     TEXT,
-        created_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        updated_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-    );
-    """)
     engine = create_engine(pg_dsn)
     with engine.begin() as conn:
-        conn.execute(ddl)
+        result = conn.execute(text(f"""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables
+                WHERE table_name = '{table}'
+            );
+        """))
+        exists = result.scalar()
 
-def _ensure_items_table(pg_dsn: str, table: str = "items") -> None:
-    """Create the items table if it doesn't exist."""
+    if not exists:
+        raise RuntimeError(f"Table '{table}' does not exist. Please run the table creation script first.")
+
+def _check_items_table(pg_dsn: str, table: str = "items") -> None:
+    """Check if the items table exists, raise error if not."""
     try:
         from sqlalchemy import create_engine, text
     except ImportError as e:
         raise RuntimeError("Install: pip install sqlalchemy psycopg2-binary") from e
 
-    ddl = text(f"""
-    CREATE TABLE IF NOT EXISTS {table} (
-        sku         TEXT PRIMARY KEY,
-        product_name TEXT NOT NULL,
-        category    TEXT,
-        brand       TEXT,
-        description TEXT,
-        unit_price  NUMERIC(10,2),
-        cost_price  NUMERIC(10,2),
-        is_active   BOOLEAN DEFAULT TRUE,
-        created_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        updated_at  TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-    );
-    """)
     engine = create_engine(pg_dsn)
     with engine.begin() as conn:
-        conn.execute(ddl)
+        result = conn.execute(text(f"""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables
+                WHERE table_name = '{table}'
+            );
+        """))
+        exists = result.scalar()
 
-def _ensure_sales_table(pg_dsn: str, table: str) -> None:
-    """
-    Create the target table if it doesn't exist.
-    order_id is the unique key we upsert on.
-    """
+    if not exists:
+        raise RuntimeError(f"Table '{table}' does not exist. Please run the table creation script first.")
+
+def _check_sales_table(pg_dsn: str, table: str) -> None:
+    """Check if the sales table exists, raise error if not."""
     try:
         from sqlalchemy import create_engine, text
     except ImportError as e:
         raise RuntimeError("Install: pip install sqlalchemy psycopg2-binary") from e
 
-    ddl = text(f"""
-    CREATE TABLE IF NOT EXISTS {table} (
-        order_id   TEXT PRIMARY KEY,
-        client_id  TEXT NOT NULL,
-        date       DATE NOT NULL,
-        total_sum  NUMERIC(10,2) NOT NULL,
-        price_type TEXT NOT NULL,
-        status     TEXT DEFAULT 'confirmed',
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (client_id) REFERENCES clients(client_id) ON DELETE RESTRICT
-    );
-    """)
     engine = create_engine(pg_dsn)
     with engine.begin() as conn:
-        conn.execute(ddl)
+        result = conn.execute(text(f"""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables
+                WHERE table_name = '{table}'
+            );
+        """))
+        exists = result.scalar()
+
+    if not exists:
+        raise RuntimeError(f"Table '{table}' does not exist. Please run the table creation script first.")
 
 def _prepare_sales_dataframe(df: pd.DataFrame, pg_dsn: str) -> pd.DataFrame:
     """
@@ -271,8 +259,8 @@ def _prepare_sales_dataframe(df: pd.DataFrame, pg_dsn: str) -> pd.DataFrame:
 
     engine = create_engine(pg_dsn)
 
-    # Create clients table if it doesn't exist
-    _ensure_clients_table(pg_dsn, "clients")
+    # Check that clients table exists
+    _check_clients_table(pg_dsn, "clients")
 
     # Create a copy of the dataframe
     result_df = df.copy()
@@ -361,10 +349,10 @@ def upsert_sales_df_to_postgres(df: pd.DataFrame, pg_dsn: str, table: str = "sal
     if missing:
         raise ValueError(f"Missing required columns: {sorted(missing)}")
 
-    # Ensure all required tables exist first
-    _ensure_clients_table(pg_dsn, "clients")
-    _ensure_items_table(pg_dsn, "items")
-    _ensure_sales_table(pg_dsn, table)
+    # Check that all required tables exist
+    _check_clients_table(pg_dsn, "clients")
+    _check_items_table(pg_dsn, "items")
+    _check_sales_table(pg_dsn, table)
 
     # Convert client names to client_ids (create if they don't exist)
     df = _prepare_sales_dataframe(df, pg_dsn)
@@ -404,30 +392,25 @@ def upsert_sales_df_to_postgres(df: pd.DataFrame, pg_dsn: str, table: str = "sal
                 }
             )
 
-def _ensure_sales_items_table(pg_dsn: str, table: str = "sales_items") -> None:
+def _check_sales_items_table(pg_dsn: str, table: str = "sales_items") -> None:
+    """Check if the sales_items table exists, raise error if not."""
     try:
         from sqlalchemy import create_engine, text
     except ImportError as e:
         raise RuntimeError("Install: pip install sqlalchemy psycopg2-binary") from e
 
-    ddl = text(f"""
-    CREATE TABLE IF NOT EXISTS {table} (
-        order_id     TEXT NOT NULL,
-        line_no      INTEGER NOT NULL,
-        sku          TEXT NOT NULL,
-        product_name TEXT,
-        qty          NUMERIC(10,3) NOT NULL,
-        price        NUMERIC(10,2) NOT NULL,
-        total        NUMERIC(10,2) NOT NULL,
-        created_at   TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        PRIMARY KEY (order_id, line_no),
-        FOREIGN KEY (order_id) REFERENCES sales(order_id) ON DELETE CASCADE,
-        FOREIGN KEY (sku) REFERENCES items(sku) ON DELETE RESTRICT
-    );
-    """)
     engine = create_engine(pg_dsn)
     with engine.begin() as conn:
-        conn.execute(ddl)
+        result = conn.execute(text(f"""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables
+                WHERE table_name = '{table}'
+            );
+        """))
+        exists = result.scalar()
+
+    if not exists:
+        raise RuntimeError(f"Table '{table}' does not exist. Please run the table creation script first.")
 
 def upsert_sales_items_df_to_postgres(df: pd.DataFrame, pg_dsn: str, table: str = "sales_items", chunk_size: int = 5000) -> None:
     if df.empty:
@@ -442,9 +425,9 @@ def upsert_sales_items_df_to_postgres(df: pd.DataFrame, pg_dsn: str, table: str 
     if miss:
         raise ValueError(f"Missing required columns in items df: {sorted(miss)}")
 
-    # Ensure items table exists
-    _ensure_items_table(pg_dsn, "items")
-    _ensure_sales_items_table(pg_dsn, table)
+    # Check that required tables exist
+    _check_items_table(pg_dsn, "items")
+    _check_sales_items_table(pg_dsn, table)
 
     # type normalization
     out = df.copy()
