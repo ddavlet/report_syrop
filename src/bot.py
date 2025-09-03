@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import aiohttp
+import asyncio
 from pathlib import Path
 from datetime import datetime
 from aiogram import Bot, Dispatcher, F
@@ -178,6 +180,72 @@ def _check_access(message: Message) -> bool:
     return message.from_user and message.from_user.id in _ALLOWED
 
 
+async def _upload_audio_to_endpoint(audio_file_path: str, user_id: int, chat_id: int) -> bool:
+    """Upload audio file to the specified endpoint and handle response"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            with open(audio_file_path, 'rb') as audio_file:
+                data = aiohttp.FormData()
+                data.add_field('audio', audio_file, filename='audio.ogg', content_type='audio/ogg')
+                params = {
+                    'user_id': user_id,
+                    'chat_id': chat_id
+                }
+                # address = f'http://n8n:5678/webhook-test/6b150169-782c-43ff-ac58-7bc9ac7037da'
+                address = 'http://n8n:5678/webhook/6b150169-782c-43ff-ac58-7bc9ac7037da'
+                async with session.post(address, params=params,  data=data) as response:
+                    if response.status != 200:
+                        print(f"Error uploading audio: {response.status}")
+                        print(await response.json())
+                        return False
+
+                    response_data = await response.json()
+                    print(f"Audio uploaded successfully: {response.status}")
+                    print(response_data)
+
+                    # Check if the response indicates the report is ready
+                    if response_data.get("ready") == True:
+                        report_slug = response_data.get("report_slug")
+                        parameters = response_data.get("parameters", {})
+
+                        if report_slug:
+                            # Generate and send the report
+                            await _generate_and_send_report(report_slug, parameters, chat_id)
+                            return True
+                    else:
+                        # If ready is false, send the message field to user
+                        message = response_data.get("message")
+                        if message:
+                            await bot.send_message(chat_id=chat_id, text=message)
+                    return True
+    except Exception as e:
+        print(f"Error uploading audio: {e}")
+        return False
+
+
+async def _generate_and_send_report(report_slug: str, parameters: dict, chat_id: int):
+    """Generate and send a report based on the audio response"""
+    try:
+        # Send typing action to indicate processing
+        await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+
+        # Generate the report
+        file_path: Path = run_report(report_slug, params=parameters)
+
+        # Send the report file
+        await bot.send_chat_action(chat_id=chat_id, action=ChatAction.UPLOAD_DOCUMENT)
+        await bot.send_document(
+            chat_id=chat_id,
+            document=FSInputFile(str(file_path)),
+            caption=f"✅ Отчёт готов: <b>{report_slug}</b>\nПараметры: {_render_params_summary(parameters)}\nФайл: <code>{file_path.name}</code>"
+        )
+    except Exception as e:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"❌ Ошибка при генерации отчёта <b>{report_slug}</b>:\n<code>{e}</code>"
+        )
+
+
 def run_report(slug: str, params: dict | None = None) -> Path:
     """Run a report and return the output file path"""
     from src.settings import OUT_DIR
@@ -190,6 +258,46 @@ def run_report(slug: str, params: dict | None = None) -> Path:
     out_path = out_dir / report.default_filename()
     report.export_excel(df, out_path, title=report.title)
     return out_path
+
+
+# --- Обработка аудио сообщений
+@dp.message(F.audio | F.voice)
+async def handle_audio_message(m: Message):
+    if not _check_access(m):
+        await m.answer("⛔️ Доступ запрещён.")
+        return
+
+    try:
+        # Получаем файл аудио
+        if m.audio:
+            file = await bot.get_file(m.audio.file_id)
+        elif m.voice:
+            file = await bot.get_file(m.voice.file_id)
+        else:
+            await m.answer("❌ Не удалось получить аудио файл.")
+            return
+
+        # Скачиваем файл
+        audio_path = f"temp_audio_{m.message_id}.ogg"
+        await bot.download_file(file.file_path, audio_path)
+
+        # Отправляем уведомление о начале загрузки
+        await m.answer("🎵 Обрабатываю аудио запись...")
+
+        # Загружаем на endpoint
+        success = await _upload_audio_to_endpoint(audio_path, m.from_user.id if m.from_user else 0, m.chat.id)
+
+        # Удаляем временный файл
+        try:
+            Path(audio_path).unlink()
+        except:
+            pass
+
+        if not success:
+            await m.answer("❌ Ошибка при отправке аудио записи на сервер.")
+
+    except Exception as e:
+        await m.answer(f"❌ Произошла ошибка при обработке аудио: {str(e)}")
 
 
 # --- Старт: приветствие и кнопка "📊 Список отчётов"
@@ -206,7 +314,8 @@ async def cmd_start(m: Message):
     )
     await m.answer(
         "👋 Привет! Я бот для генерации отчётов OK Syrop.\n\n"
-        "Нажмите кнопку ниже, чтобы выбрать отчёт.",
+        "Нажмите кнопку ниже, чтобы выбрать отчёт.\n\n"
+        "🎵 Также вы можете отправить аудио сообщение, и я загружу его на сервер.",
         reply_markup=kb
     )
 

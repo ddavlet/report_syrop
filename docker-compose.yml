@@ -37,27 +37,27 @@ services:
         condition: service_healthy
     command: ["python", "-m", "src.bot"]
 
-  # data_loader:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile
-  #   image: report_syrop_data_loader:latest
-  #   container_name: report_syrop_data_loader
-  #   working_dir: /app
-  #   volumes:
-  #     - ./:/app
-  #     - ./data:/app/data
-  #   ports:
-  #     - "5500:8000"
-  #   environment:
-  #     # core app config
-  #     PG_DSN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-  #     # PG_TABLE: sales
-  #     PYTHONPATH: /app
-  #   depends_on:
-  #     db:
-  #       condition: service_healthy
-  #   command: ["python", "-m", "src.data_loader_service"]
+  data_loader:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: report_syrop_data_loader:latest
+    container_name: report_syrop_data_loader
+    working_dir: /app
+    volumes:
+      - ./:/app
+      - ./data:/app/data
+    ports:
+      - "5500:8000"
+    environment:
+      # core app config
+      PG_DSN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      # PG_TABLE: sales
+      PYTHONPATH: /app
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["python", "-m", "src.data_loader_service"]
 
   adminer:
     image: adminer:latest
@@ -68,5 +68,32 @@ services:
       db:
         condition: service_started
 
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    restart: always
+    ports:
+      - "127.0.0.1:5678:5678"
+    environment:
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      # - N8N_HOST=${SUBDOMAIN}.${DOMAIN_NAME}
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=https
+      - N8N_RUNNERS_ENABLED=true
+      - NODE_ENV=production
+      # - WEBHOOK_URL=https://${SUBDOMAIN}.${DOMAIN_NAME}/
+      - WEBHOOK_URL=localhost:5678/
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE}
+      - TZ=${GENERIC_TIMEZONE}
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB_N8N}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+      - N8N_PROXY_HOPS=1
+    volumes:
+      - n8n_data:/home/node/.n8n
+
 volumes:
   pg_data:
+  n8n_data:

@@ -1,0 +1,61 @@
+{
+  "title": "Unified Report Schema",
+  "description": "JSON Schema for all report types in the Report Syrop system",
+  "type": "object",
+  "properties": {
+    "report_metadata": {
+      "type": "object",
+      "description": "Metadata about the report",
+      "properties": {
+        "slug": {
+          "type": "string",
+          "description": "Unique identifier for the report type",
+          "enum": ["new_customers", "inactive_clients", "average_check", "abc_goods", "abc_clients"]
+        },
+        "parameters": {
+          "type": "object",
+          "description": "Parameters used to generate the report",
+          "properties": {
+            "period_days": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Number of days for the analysis period"
+            },
+            "date_from": {
+              "type": "string",
+              "format": "date",
+              "description": "Start date for the analysis period (YYYY-MM-DD)"
+            },
+            "date_to": {
+              "type": "string",
+              "format": "date",
+              "description": "End date for the analysis period (YYYY-MM-DD)"
+            },
+            "cutoff_days": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Number of days to consider a client inactive"
+            },
+            "start_date": {
+              "type": "string",
+              "format": "date",
+              "description": "Start date for data loading (YYYY-MM-DD)"
+            },
+            "dim": {
+              "type": "string",
+              "enum": ["overall", "client", "month", "client_month"],
+              "description": "Dimension for average check analysis"
+            },
+            "min_orders": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Minimum number of orders for filtering"
+            }
+          }
+        }
+      },
+      "required": ["slug", "parameters"]
+    }
+  },
+  "required": ["report_metadata"]
+}

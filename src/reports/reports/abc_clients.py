@@ -25,6 +25,7 @@ class ABCItemsReport(BaseReport):
         # Parameters are now serialized by BaseReport._serialize_params()
         period_days = self.params.get("period_days")
         date_from = self.params.get("date_from")
+        date_to = self.params.get("date_to")
 
         # Загружаем данные
         df = load_sales_df()
@@ -32,9 +33,9 @@ class ABCItemsReport(BaseReport):
             return df
 
         # Фильтр по времени
-        if date_from is not None:
+        if date_from and date_to:
             start = pd.to_datetime(date_from)
-            end = pd.Timestamp.now()
+            end = pd.to_datetime(date_to) + pd.Timedelta(days=1)
             df = df[(df["date"] >= start) & (df["date"] < end)]
         else:
             # Используем период по умолчанию
