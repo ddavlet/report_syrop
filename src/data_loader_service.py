@@ -12,9 +12,17 @@ from datetime import datetime
 from aiohttp import web, ClientSession
 from typing import List, Dict, Any
 
-from src.settings import settings
-from src.core.data_loader import upsert_confirmed_sales_df_to_postgres, upsert_sales_items_df_to_postgres, _check_sales_items_table
+from src.settings import settings, BASE_DIR
+from src.core.data_loader import (
+    upsert_confirmed_sales_df_to_postgres,
+    upsert_sales_items_df_to_postgres,
+    _check_sales_items_table,
+    _check_items_table,
+    _check_clients_table,
+    _check_sales_table
+)
 import pandas as pd
+from sqlalchemy import create_engine, text
 
 # Configure logging
 logging.basicConfig(
@@ -24,7 +32,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Create web application
-app = web.Application(client_max_size=10*1024*1024)  # 10MB limit
+app = web.Application(client_max_size=settings.data_loader_max_size)
 
 async def handle_data_update(request):
     """Handle POST requests with new sales data and load to PostgreSQL"""
@@ -41,11 +49,17 @@ async def handle_data_update(request):
 
         # Validate each record
         for i, record in enumerate(data):
-            required_fields = ["client", "date", "total_sum", "id", "confirmed"]
+            required_fields = ["client", "date", "total_sum", "id", "confirmed", "items"]
             missing_fields = [field for field in required_fields if field not in record]
             if missing_fields:
                 return web.json_response({
                     "error": f"Record {i} missing required fields: {missing_fields}"
+                }, status=400)
+
+            # Validate items field is list
+            if not isinstance(record["items"], list):
+                return web.json_response({
+                    "error": f"Record {i} 'items' field must be list, got {type(record['items'])}"
                 }, status=400)
 
             # Validate confirmed field is boolean
@@ -53,146 +67,44 @@ async def handle_data_update(request):
                 return web.json_response({
                     "error": f"Record {i} 'confirmed' field must be boolean, got {type(record['confirmed'])}"
                 }, status=400)
-
         # Convert to DataFrame
         df = pd.DataFrame(data)
 
         # Normalize column names and data types
-        df = _normalize_dataframe(df)
+        df_normalized = _normalize_dataframe(df)
+
+        upsert_confirmed_sales_df_to_postgres(df_normalized, settings.pg_dsn, settings.pg_table)
 
         # Extract sales items data
-        sales_items_df = _extract_sales_items(df)
+        try:
+            sales_items_df = _extract_sales_items(df)
 
-        # Load to PostgreSQL
-        if settings.pg_dsn:
-            try:
-                # Load sales data
-                upsert_confirmed_sales_df_to_postgres(
-                    df,
-                    settings.pg_dsn,
-                    table=settings.pg_table
-                )
-                confirmed_count = len(df[df["confirmed"] == True])
-                unconfirmed_count = len(df[df["confirmed"] == False])
-                logger.info(f"Successfully processed sales data: {confirmed_count} confirmed records added, {unconfirmed_count} unconfirmed records deleted")
+            # Get Postgres DSN and table name from settings
+            pg_dsn = settings.pg_dsn
+            sales_items_table = settings.pg_sales_items_table
 
-                # Load sales items data if available
-                if not sales_items_df.empty:
-                    # Ensure items exist in items table first
-                    _ensure_items_in_items_table(sales_items_df, settings.pg_dsn)
-
-                    # Then load sales items
-                    upsert_sales_items_df_to_postgres(
-                        sales_items_df,
-                        settings.pg_dsn,
-                        table="sales_items"
-                    )
-                    logger.info(f"Successfully loaded {len(sales_items_df)} sales items records to PostgreSQL")
-
-                # Save backup to JSON file
-                await _save_backup_json(data)
-
-                # Count confirmed and unconfirmed records
-                confirmed_count = len(df[df["confirmed"] == True])
-                unconfirmed_count = len(df[df["confirmed"] == False])
-
-                return web.json_response({
-                    "status": "success",
-                    "message": f"Data processed successfully. Added {confirmed_count} confirmed sales records, deleted {unconfirmed_count} unconfirmed records, and processed {len(sales_items_df)} items records.",
-                    "timestamp": datetime.now().isoformat(),
-                    "confirmed_count": confirmed_count,
-                    "unconfirmed_count": unconfirmed_count
-                })
-
-            except Exception as e:
-                logger.error(f"Failed to load data to PostgreSQL: {e}")
-                return web.json_response({
-                    "error": f"Failed to load data to PostgreSQL: {str(e)}"
-                }, status=500)
-        else:
-            # Fallback: just save to JSON if no PostgreSQL
-            await _save_backup_json(data)
-            # Count confirmed and unconfirmed records
-            confirmed_count = len(df[df["confirmed"] == True])
-            unconfirmed_count = len(df[df["confirmed"] == False])
-
+            if pg_dsn is None:
+                logger.error("Postgres DSN (pg_dsn) is not configured in settings.")
+                return web.json_response({"error": "Postgres DSN (pg_dsn) is not configured."}, status=500)
+            upsert_sales_items_df_to_postgres(sales_items_df, pg_dsn, table=sales_items_table)
+            logger.info(f"Upserted {len(sales_items_df)} sales items to table '{sales_items_table}'")
+        except Exception as e:
+            logger.error(f"Failed to upsert sales items: {e}")
             return web.json_response({
-                "status": "success",
-                "message": f"Data saved to JSON (no PostgreSQL configured). Processed {len(df)} records ({confirmed_count} confirmed, {unconfirmed_count} unconfirmed).",
-                "timestamp": datetime.now().isoformat(),
-                "confirmed_count": confirmed_count,
-                "unconfirmed_count": unconfirmed_count
-            })
+                "error": f"Failed to upsert sales items: {str(e)}"
+            }, status=500)
+
 
     except Exception as e:
         logger.error(f"Error processing data update: {e}")
         return web.json_response({"error": str(e)}, status=500)
 
-async def handle_load_json(request):
-    """Handle POST requests to load data from a JSON file path"""
-    try:
-        data = await request.json()
-        json_path = data.get("json_path")
-
-        if not json_path:
-            return web.json_response({"error": "json_path is required"}, status=400)
-
-        json_path = Path(json_path)
-        if not json_path.exists():
-            return web.json_response({"error": f"File not found: {json_path}"}, status=400)
-
-        # Load JSON data
-        with open(json_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-
-        logger.info(f"Loading data from {json_path}: {len(data)} records")
-
-        # Convert to DataFrame and load to PostgreSQL
-        df = pd.DataFrame(data)
-        df = _normalize_dataframe(df)
-
-        # Extract sales items data
-        sales_items_df = _extract_sales_items(df)
-
-        if settings.pg_dsn:
-            # Load sales data
-            upsert_confirmed_sales_df_to_postgres(df, settings.pg_dsn, table=settings.pg_table)
-            confirmed_count = len(df[df["confirmed"] == True])
-            unconfirmed_count = len(df[df["confirmed"] == False])
-            logger.info(f"Successfully processed sales data from {json_path}: {confirmed_count} confirmed records added, {unconfirmed_count} unconfirmed records deleted")
-
-            # Load sales items data if available
-            if not sales_items_df.empty:
-                # Ensure items exist in items table first
-                _ensure_items_in_items_table(sales_items_df, settings.pg_dsn)
-
-                # Then load sales items
-                upsert_sales_items_df_to_postgres(
-                    sales_items_df,
-                    settings.pg_dsn,
-                    table="sales_items"
-                )
-                logger.info(f"Successfully loaded {len(sales_items_df)} sales items records from {json_path} to PostgreSQL")
-
-            # Count confirmed and unconfirmed records
-            confirmed_count = len(df[df["confirmed"] == True])
-            unconfirmed_count = len(df[df["confirmed"] == False])
-
-            return web.json_response({
-                "status": "success",
-                "message": f"Data loaded from {json_path} to PostgreSQL. Added {confirmed_count} confirmed sales records, deleted {unconfirmed_count} unconfirmed records, and processed {len(sales_items_df)} items records.",
-                "timestamp": datetime.now().isoformat(),
-                "confirmed_count": confirmed_count,
-                "unconfirmed_count": unconfirmed_count
-            })
-        else:
-            return web.json_response({
-                "error": "PostgreSQL not configured"
-            }, status=500)
-
-    except Exception as e:
-        logger.error(f"Error loading JSON file: {e}")
-        return web.json_response({"error": str(e)}, status=500)
+    return web.json_response({
+        "status": "ok",
+        "sales_items_processed": len(sales_items_df),
+        "items_processed": len(df),
+        "total_sales_with_items": len(df[df["confirmed"]])
+    })
 
 async def handle_health(request):
     """Health check endpoint"""
@@ -235,12 +147,22 @@ def _extract_sales_items(sales_data: pd.DataFrame) -> pd.DataFrame:
         if not sale.get("confirmed"):
             continue
 
-        order_id = sale.get("order_id") # Use order_id instead of id
-        if not order_id:
-            continue
+        order_id = sale.get("id") # Use order_id instead of id
+        items = sale.get("items")
 
-        items = sale.get("items", [])
+        if not order_id:
+            raise ValueError(f"Record {sale} has no order_id")
+        if not items:
+            logger.warning(f"Record {sale} has no items")
+            raise ValueError(f"Record {sale['id']} has no items")
+
+        required_fields = ["id", "name", "pcs", "price", "sum", "VAT", "selfcost"]
+
         for line_no, item in enumerate(items, 1):
+            logger.info(f"Processing item: {item}")
+            missing_fields = [field for field in required_fields if field not in item]
+            if missing_fields:
+                raise ValueError(f"Record {sale} missing required fields in items: {missing_fields}. Item: {item} for line_no: {line_no}")
             items_rows.append({
                 "order_id": order_id,
                 "line_no": line_no,
@@ -248,13 +170,14 @@ def _extract_sales_items(sales_data: pd.DataFrame) -> pd.DataFrame:
                 "product_name": item.get("name"),
                 "qty": item.get("pcs"),
                 "price": item.get("price"),
-                "total": item.get("sum")
+                "total": item.get("sum"),
+                "vat": item.get("VAT"),
+                "selfcost": item.get("selfcost")
             })
 
-    if not items_rows:
-        return pd.DataFrame()
-
     df = pd.DataFrame(items_rows)
+
+    _ensure_items_in_items_table(df, settings.pg_dsn)
 
     # Normalize data types
     if "qty" in df:
@@ -263,6 +186,10 @@ def _extract_sales_items(sales_data: pd.DataFrame) -> pd.DataFrame:
         df["price"] = pd.to_numeric(df["price"], errors="coerce")
     if "total" in df:
         df["total"] = pd.to_numeric(df["total"], errors="coerce")
+    if "vat" in df:
+        df["vat"] = pd.to_numeric(df["vat"], errors="coerce")
+    if "selfcost" in df:
+        df["selfcost"] = pd.to_numeric(df["selfcost"], errors="coerce")
 
     return df
 
@@ -274,14 +201,10 @@ def _ensure_items_in_items_table(items_df: pd.DataFrame, pg_dsn: str) -> None:
     if items_df.empty:
         return
 
-    try:
-        from sqlalchemy import create_engine, text
-    except ImportError as e:
-        raise RuntimeError("Install: pip install sqlalchemy psycopg2-binary") from e
+    # sqlalchemy already imported at top
 
     # Check that items table exists
-    from src.core.data_loader import _check_items_table
-    _check_items_table(pg_dsn, "items")
+    _check_items_table(pg_dsn, settings.pg_items_table)
 
     engine = create_engine(pg_dsn)
 
@@ -292,14 +215,13 @@ def _ensure_items_in_items_table(items_df: pd.DataFrame, pg_dsn: str) -> None:
         return
 
     # Create items table if it doesn't exist
-    from src.core.data_loader import _ensure_items_table
-    _ensure_items_table(pg_dsn, "items")
+    _check_items_table(pg_dsn, settings.pg_items_table)
 
     # Check which items already exist in the database
     with engine.connect() as conn:
         existing_items = set()
         placeholders = ",".join([f":sku_{i}" for i in range(len(unique_skus))])
-        query = text(f"SELECT sku FROM items WHERE sku IN ({placeholders})")
+        query = text(f"SELECT sku FROM {settings.pg_items_table} WHERE sku IN ({placeholders})")
         params = {f"sku_{i}": sku for i, sku in enumerate(unique_skus)}
         result = conn.execute(query, params)
         existing_items = {row[0] for row in result}
@@ -312,8 +234,8 @@ def _ensure_items_in_items_table(items_df: pd.DataFrame, pg_dsn: str) -> None:
                 # Find the product name for this SKU
                 product_name = items_df[items_df["sku"] == sku]["product_name"].iloc[0] if not items_df[items_df["sku"] == sku].empty else str(sku)
 
-                insert_query = text("""
-                    INSERT INTO items (sku, product_name, is_active)
+                insert_query = text(f"""
+                    INSERT INTO {settings.pg_items_table} (sku, product_name, is_active)
                     VALUES (:sku, :product_name, TRUE)
                     ON CONFLICT (sku) DO NOTHING
                 """)
@@ -324,7 +246,7 @@ def _ensure_items_in_items_table(items_df: pd.DataFrame, pg_dsn: str) -> None:
 async def _save_backup_json(data: List[Dict[str, Any]]) -> None:
     """Save data as backup JSON file"""
     try:
-        from src.settings import BASE_DIR
+        # BASE_DIR already imported at top
         backup_dir = BASE_DIR / "data" / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
 
@@ -361,7 +283,6 @@ async def notify_telegram(message: str) -> None:
 # Register routes after function definitions
 app.router.add_post("/update", handle_data_update)
 app.router.add_get("/health", handle_health)
-app.router.add_post("/load-json", handle_load_json)
 
 async def main():
     """Start the data loader service"""
@@ -369,11 +290,10 @@ async def main():
     runner = web.AppRunner(app)
     await runner.setup()
 
-    port = 8000
-    site = web.TCPSite(runner, '0.0.0.0', port)
+    site = web.TCPSite(runner, settings.data_loader_host, settings.data_loader_port)
     await site.start()
 
-    logger.info(f"🚀 Data Loader Service started on port {port}")
+    logger.info(f"🚀 Data Loader Service started on port {settings.data_loader_port}")
     logger.info(f"📡 Endpoints:")
     logger.info(f"   POST /update - Load new sales data")
     logger.info(f"   POST /load-json - Load data from JSON file")
@@ -383,16 +303,11 @@ async def main():
         logger.info(f"🗄️  PostgreSQL configured: {settings.pg_table}")
         # Ensure all required tables exist
         try:
-            from src.core.data_loader import (
-                _check_clients_table,
-                _check_items_table,
-                _check_sales_table,
-                _check_sales_items_table
-            )
-            _check_clients_table(settings.pg_dsn, "clients")
-            _check_items_table(settings.pg_dsn, "items")
+            # All check functions already imported at top
+            _check_clients_table(settings.pg_dsn, settings.pg_clients_table)
+            _check_items_table(settings.pg_dsn, settings.pg_items_table)
             _check_sales_table(settings.pg_dsn, settings.pg_table)
-            _check_sales_items_table(settings.pg_dsn, "sales_items")
+            _check_sales_items_table(settings.pg_dsn, settings.pg_sales_items_table)
             logger.info("✅ All PostgreSQL tables ensured")
         except Exception as e:
             logger.warning(f"⚠️  Could not ensure PostgreSQL tables: {e}")

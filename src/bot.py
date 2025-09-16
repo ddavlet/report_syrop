@@ -191,7 +191,6 @@ async def _upload_audio_to_endpoint(audio_file_path: str, user_id: int, chat_id:
                     'user_id': user_id,
                     'chat_id': chat_id
                 }
-                # address = f'http://n8n:5678/webhook-test/6b150169-782c-43ff-ac58-7bc9ac7037da'
                 address = 'http://n8n:5678/webhook/6b150169-782c-43ff-ac58-7bc9ac7037da'
                 async with session.post(address, params=params,  data=data) as response:
                     if response.status != 200:

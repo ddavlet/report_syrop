@@ -1,11 +1,12 @@
 services:
   db:
-    image: postgres:15
+    image: pgvector/pgvector:pg17-trixie
     container_name: report_syrop_db
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: ${GENERIC_TIMEZONE}
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
@@ -53,6 +54,15 @@ services:
       # core app config
       PG_DSN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       # PG_TABLE: sales
+      # Data Loader Service Configuration
+      DATA_LOADER_PORT: 8000
+      DATA_LOADER_HOST: 0.0.0.0
+      DATA_LOADER_MAX_SIZE: 10485760  # 10MB
+      DATA_LOADER_CHUNK_SIZE: 5000
+      # PostgreSQL Table Names
+      PG_CLIENTS_TABLE: clients
+      PG_ITEMS_TABLE: items
+      PG_SALES_ITEMS_TABLE: sales_items
       PYTHONPATH: /app
     depends_on:
       db:
@@ -72,25 +82,24 @@ services:
     image: docker.n8n.io/n8nio/n8n
     restart: always
     ports:
-      - "127.0.0.1:5678:5678"
+      - "5678:5678"
     environment:
       - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
-      # - N8N_HOST=${SUBDOMAIN}.${DOMAIN_NAME}
-      - N8N_HOST=localhost
+      - N8N_HOST=10.100.0.31
       - N8N_PORT=5678
-      - N8N_PROTOCOL=https
+      - N8N_PROTOCOL=http
       - N8N_RUNNERS_ENABLED=true
       - NODE_ENV=production
-      # - WEBHOOK_URL=https://${SUBDOMAIN}.${DOMAIN_NAME}/
-      - WEBHOOK_URL=localhost:5678/
+      - WEBHOOK_URL=10.100.0.31:5678/
       - GENERIC_TIMEZONE=${GENERIC_TIMEZONE}
       - TZ=${GENERIC_TIMEZONE}
-      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_HOST=db
       - DB_POSTGRESDB_PORT=5432
       - DB_POSTGRESDB_DATABASE=${POSTGRES_DB_N8N}
       - DB_POSTGRESDB_USER=${POSTGRES_USER}
       - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
       - N8N_PROXY_HOPS=1
+      - N8N_SECURE_COOKIE=false
     volumes:
       - n8n_data:/home/node/.n8n
 

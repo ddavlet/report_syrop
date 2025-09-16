@@ -1,12 +1,24 @@
 # data_loader.py
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Optional
 
+import numpy as np
 import pandas as pd
+from sqlalchemy import create_engine, text
 
 from src.settings import settings
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+# Initialize logger
+logger = logging.getLogger(__name__)
 
 
 def load_sales_items_df(start_date: Optional[datetime] = None) -> pd.DataFrame:
@@ -50,10 +62,7 @@ def _load_from_postgres(pg_dsn: str, table: str, start_date: Optional[datetime] 
     if not pg_dsn:
         raise ValueError("PG_DSN is empty in settings")
 
-    try:
-        from sqlalchemy import create_engine, text
-    except ImportError as e:
-        raise RuntimeError("Install: pip install sqlalchemy psycopg2-binary") from e
+    # sqlalchemy already imported at top
 
     engine = create_engine(pg_dsn)
 
@@ -116,10 +125,7 @@ def _load_items_from_postgres(pg_dsn: str, start_date: Optional[datetime] = None
     if not pg_dsn:
         raise ValueError("PG_DSN is empty in settings")
 
-    try:
-        from sqlalchemy import create_engine, text
-    except ImportError as e:
-        raise RuntimeError("Install: pip install sqlalchemy psycopg2-binary") from e
+    # sqlalchemy already imported at top
 
     engine = create_engine(pg_dsn)
 
@@ -187,12 +193,13 @@ def _normalize_dtypes(df: pd.DataFrame) -> None:
     if "order_id" in df:
         df["order_id"] = df["order_id"].astype(str)
 
-def _check_clients_table(pg_dsn: str, table: str = "clients") -> None:
+def _check_clients_table(pg_dsn: str, table: str = None) -> None:
     """Check if the clients table exists, raise error if not."""
-    try:
-        from sqlalchemy import create_engine, text
-    except ImportError as e:
-        raise RuntimeError("Install: pip install sqlalchemy psycopg2-binary") from e
+    # Use settings default if not provided
+    if table is None:
+        table = settings.pg_clients_table
+
+    # sqlalchemy already imported at top
 
     engine = create_engine(pg_dsn)
     with engine.begin() as conn:
@@ -207,12 +214,13 @@ def _check_clients_table(pg_dsn: str, table: str = "clients") -> None:
     if not exists:
         raise RuntimeError(f"Table '{table}' does not exist. Please run the table creation script first.")
 
-def _check_items_table(pg_dsn: str, table: str = "items") -> None:
+def _check_items_table(pg_dsn: str, table: str = None) -> None:
     """Check if the items table exists, raise error if not."""
-    try:
-        from sqlalchemy import create_engine, text
-    except ImportError as e:
-        raise RuntimeError("Install: pip install sqlalchemy psycopg2-binary") from e
+    # Use settings default if not provided
+    if table is None:
+        table = settings.pg_items_table
+
+    # sqlalchemy already imported at top
 
     engine = create_engine(pg_dsn)
     with engine.begin() as conn:
@@ -229,10 +237,7 @@ def _check_items_table(pg_dsn: str, table: str = "items") -> None:
 
 def _check_sales_table(pg_dsn: str, table: str) -> None:
     """Check if the sales table exists, raise error if not."""
-    try:
-        from sqlalchemy import create_engine, text
-    except ImportError as e:
-        raise RuntimeError("Install: pip install sqlalchemy psycopg2-binary") from e
+    # sqlalchemy already imported at top
 
     engine = create_engine(pg_dsn)
     with engine.begin() as conn:
@@ -252,10 +257,7 @@ def _prepare_sales_dataframe(df: pd.DataFrame, pg_dsn: str) -> pd.DataFrame:
     Prepare sales dataframe by ensuring clients exist and using client_id when available.
     client_id is the primary key in the clients table.
     """
-    try:
-        from sqlalchemy import create_engine, text
-    except ImportError as e:
-        raise RuntimeError("Install: pip install sqlalchemy psycopg2-binary") from e
+    # sqlalchemy already imported at top
 
     engine = create_engine(pg_dsn)
 
@@ -333,7 +335,7 @@ def _prepare_sales_dataframe(df: pd.DataFrame, pg_dsn: str) -> pd.DataFrame:
 
     return result_df
 
-def upsert_sales_df_to_postgres(df: pd.DataFrame, pg_dsn: str, table: str = "sales", chunk_size: int = 5000) -> None:
+def upsert_sales_df_to_postgres(df: pd.DataFrame, pg_dsn: str, table: str = None, chunk_size: int = None) -> None:
     """
     Upsert sales by order_id.
     Input DataFrame must include: client, date, total_sum, price_type, order_id.
@@ -341,6 +343,12 @@ def upsert_sales_df_to_postgres(df: pd.DataFrame, pg_dsn: str, table: str = "sal
     """
     if df.empty:
         return
+
+    # Use settings defaults if not provided
+    if table is None:
+        table = settings.pg_table
+    if chunk_size is None:
+        chunk_size = settings.data_loader_chunk_size
 
     # normalize dtypes/columns
     _normalize_dtypes(df)
@@ -350,8 +358,8 @@ def upsert_sales_df_to_postgres(df: pd.DataFrame, pg_dsn: str, table: str = "sal
         raise ValueError(f"Missing required columns: {sorted(missing)}")
 
     # Check that all required tables exist
-    _check_clients_table(pg_dsn, "clients")
-    _check_items_table(pg_dsn, "items")
+    _check_clients_table(pg_dsn, settings.pg_clients_table)
+    _check_items_table(pg_dsn, settings.pg_items_table)
     _check_sales_table(pg_dsn, table)
 
     # Convert client names to client_ids (create if they don't exist)
@@ -361,10 +369,7 @@ def upsert_sales_df_to_postgres(df: pd.DataFrame, pg_dsn: str, table: str = "sal
     df = df.copy()
     df["date"] = pd.to_datetime(df["date"]).dt.date
 
-    try:
-        from sqlalchemy import create_engine, text
-    except ImportError as e:
-        raise RuntimeError("Install: pip install sqlalchemy psycopg2-binary") from e
+    # sqlalchemy already imported at top
 
     engine = create_engine(pg_dsn)
 
@@ -392,12 +397,13 @@ def upsert_sales_df_to_postgres(df: pd.DataFrame, pg_dsn: str, table: str = "sal
                 }
             )
 
-def _check_sales_items_table(pg_dsn: str, table: str = "sales_items") -> None:
+def _check_sales_items_table(pg_dsn: str, table: str = None) -> None:
     """Check if the sales_items table exists, raise error if not."""
-    try:
-        from sqlalchemy import create_engine, text
-    except ImportError as e:
-        raise RuntimeError("Install: pip install sqlalchemy psycopg2-binary") from e
+    # Use settings default if not provided
+    if table is None:
+        table = settings.pg_sales_items_table
+
+    # sqlalchemy already imported at top
 
     engine = create_engine(pg_dsn)
     with engine.begin() as conn:
@@ -412,12 +418,19 @@ def _check_sales_items_table(pg_dsn: str, table: str = "sales_items") -> None:
     if not exists:
         raise RuntimeError(f"Table '{table}' does not exist. Please run the table creation script first.")
 
-def upsert_sales_items_df_to_postgres(df: pd.DataFrame, pg_dsn: str, table: str = "sales_items", chunk_size: int = 5000) -> None:
+def upsert_sales_items_df_to_postgres(df: pd.DataFrame, pg_dsn: str, table: str = None, chunk_size: int = None) -> None:
+    """
+    Upsert sales items by order_id and line_no.
+    Input DataFrame must include: order_id, line_no, sku, product_name, qty, price, total.
+    """
     if df.empty:
         return
 
-    import numpy as np
-    from sqlalchemy import create_engine, text
+    # Use settings defaults if not provided
+    if table is None:
+        table = settings.pg_sales_items_table
+    if chunk_size is None:
+        chunk_size = settings.data_loader_chunk_size
 
     # required cols
     req = {"order_id", "line_no"}
@@ -426,7 +439,7 @@ def upsert_sales_items_df_to_postgres(df: pd.DataFrame, pg_dsn: str, table: str 
         raise ValueError(f"Missing required columns in items df: {sorted(miss)}")
 
     # Check that required tables exist
-    _check_items_table(pg_dsn, "items")
+    _check_items_table(pg_dsn, settings.pg_items_table)
     _check_sales_items_table(pg_dsn, table)
 
     # type normalization
@@ -440,14 +453,16 @@ def upsert_sales_items_df_to_postgres(df: pd.DataFrame, pg_dsn: str, table: str 
     with engine.begin() as connection:
         # Use individual INSERT statements with ON CONFLICT
         insert_sql_single = f"""
-            INSERT INTO {table} (order_id, line_no, sku, product_name, qty, price, total)
-            VALUES (:order_id, :line_no, :sku, :product_name, :qty, :price, :total)
+            INSERT INTO {table} (order_id, line_no, sku, product_name, qty, price, total, vat, selfcost)
+            VALUES (:order_id, :line_no, :sku, :product_name, :qty, :price, :total, :vat, :selfcost)
             ON CONFLICT (order_id, line_no) DO UPDATE
             SET sku = EXCLUDED.sku,
                 product_name = EXCLUDED.product_name,
                 qty = EXCLUDED.qty,
                 price = EXCLUDED.price,
-                total = EXCLUDED.total
+                total = EXCLUDED.total,
+                vat = EXCLUDED.vat,
+                selfcost = EXCLUDED.selfcost
         """
 
         for _, row in out.iterrows():
@@ -460,11 +475,13 @@ def upsert_sales_items_df_to_postgres(df: pd.DataFrame, pg_dsn: str, table: str 
                     'product_name': row.get('product_name'),
                     'qty': None if pd.isna(row.get('qty')) else float(row['qty']),
                     'price': None if pd.isna(row.get('price')) else float(row['price']),
-                    'total': None if pd.isna(row.get('total')) else float(row['total'])
+                    'total': None if pd.isna(row.get('total')) else float(row['total']),
+                    'vat': None if pd.isna(row.get('vat')) else float(row['vat']),
+                    'selfcost': None if pd.isna(row.get('selfcost')) else float(row['selfcost'])
                 }
             )
 
-def delete_sales_from_postgres(order_ids: list, pg_dsn: str, table: str = "sales") -> None:
+def delete_sales_from_postgres(order_ids: list, pg_dsn: str, table: str = None) -> None:
     """
     Delete sales records by order_id list.
     This will also delete related sales_items due to CASCADE.
@@ -472,12 +489,11 @@ def delete_sales_from_postgres(order_ids: list, pg_dsn: str, table: str = "sales
     if not order_ids:
         return
 
-    try:
-        from sqlalchemy import create_engine, text
-        import logging
-        logger = logging.getLogger(__name__)
-    except ImportError as e:
-        raise RuntimeError("Install: pip install sqlalchemy psycopg2-binary") from e
+    # Use settings default if not provided
+    if table is None:
+        table = settings.pg_table
+
+    # sqlalchemy and logging already imported at top
 
     engine = create_engine(pg_dsn)
 
@@ -495,13 +511,19 @@ def delete_sales_from_postgres(order_ids: list, pg_dsn: str, table: str = "sales
         result = connection.execute(text(delete_sql), params)
         logger.info(f"Deleted {len(order_ids)} unconfirmed sales records from {table}")
 
-def upsert_confirmed_sales_df_to_postgres(df: pd.DataFrame, pg_dsn: str, table: str = "sales", chunk_size: int = 5000) -> None:
+def upsert_confirmed_sales_df_to_postgres(df: pd.DataFrame, pg_dsn: str, table: str = None, chunk_size: int = None) -> None:
     """
     Upsert only confirmed sales records and delete unconfirmed ones.
     Expects df with columns: client, date, total_sum, price_type, order_id, confirmed
     """
     if df.empty:
         return
+
+    # Use settings defaults if not provided
+    if table is None:
+        table = settings.pg_table
+    if chunk_size is None:
+        chunk_size = settings.data_loader_chunk_size
 
     # normalize dtypes/columns
     _normalize_dtypes(df)

@@ -32,14 +32,8 @@ help:
 	@echo "  make clean-volumes        - Stop and remove containers and volumes"
 	@echo "  make rebuild              - Force rebuild images (no cache)"
 	@echo "  make recreate             - Rebuild containers and start services"
-	@echo "  make compose-up           - Start all Docker services (detached)"
-	@echo "  make compose-down         - Stop and remove Docker services"
 	@echo "  make compose-logs         - Tail logs for all Docker services"
 	@echo "  make compose-ps           - Show Docker services status"
-	@echo "  make compose-app          - Start only Telegram bot (container)"
-	@echo "  make compose-data-loader  - Start only data loader API (container)"
-	@echo "  make compose-db           - Start only PostgreSQL (container)"
-	@echo "  make compose-adminer      - Start Adminer UI (container)"
 	@echo "  make init-db-docker       - Initialize DB schema inside the app container"
 
 venv:
@@ -63,29 +57,12 @@ stop:
 	$(DOCKER_COMPOSE) stop
 
 # --- Docker Compose helpers ---
-compose-up:
-	$(DOCKER_COMPOSE) up -d
-
-compose-down:
-	$(DOCKER_COMPOSE) down
-
 compose-logs:
 	$(DOCKER_COMPOSE) logs -f
 
 compose-ps:
 	$(DOCKER_COMPOSE) ps
 
-compose-app:
-	$(DOCKER_COMPOSE) up -d app
-
-compose-data-loader:
-	$(DOCKER_COMPOSE) up -d data_loader
-
-compose-db:
-	$(DOCKER_COMPOSE) up -d db
-
-compose-adminer:
-	$(DOCKER_COMPOSE) up -d adminer
 
 # --- Initialize DB schema inside container ---
 init-db-docker:
@@ -132,3 +109,11 @@ rebuild:
 	$(DOCKER_COMPOSE) build --no-cache
 
 recreate: rebuild up
+
+
+# --- Reports ---
+report-sales-with-items:
+	$(DOCKER_COMPOSE) exec app sh -lc 'python scripts/return_sales.py --start-date "2024-01-01" --limit 1'
+
+deploy:
+	rsync -avz --delete --exclude 'certs' --exclude 'www' --exclude '.git' --exclude '.venv' --exclude '.cursor' --exclude '.DS_Store' --exclude '__pycache__' ./ ddavlet@10.100.0.31:/home/ddavlet/reports_app

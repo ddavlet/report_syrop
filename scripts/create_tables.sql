@@ -22,8 +22,8 @@ CREATE TABLE IF NOT EXISTS items (
     category TEXT,
     brand TEXT,
     description TEXT,
-    unit_price NUMERIC(10,2),
-    cost_price NUMERIC(10,2),
+    unit_price NUMERIC(14,2),
+    cost_price NUMERIC(14,2),
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS sales (
     order_id TEXT PRIMARY KEY,
     client_id TEXT NOT NULL,
     date DATE NOT NULL,
-    total_sum NUMERIC(10,2) NOT NULL,
+    total_sum NUMERIC(14,2) NOT NULL,
     price_type TEXT NOT NULL,
     status TEXT DEFAULT 'confirmed',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -48,9 +48,11 @@ CREATE TABLE IF NOT EXISTS sales_items (
     line_no INTEGER NOT NULL,
     sku TEXT NOT NULL,
     product_name TEXT,
-    qty NUMERIC(10,3) NOT NULL,
-    price NUMERIC(10,2) NOT NULL,
-    total NUMERIC(10,2) NOT NULL,
+    qty NUMERIC(15,3) NOT NULL,
+    price NUMERIC(14,2) NOT NULL,
+    total NUMERIC(14,2) NOT NULL,
+    vat NUMERIC(14,2),
+    selfcost NUMERIC(14,2),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (order_id, line_no),
     FOREIGN KEY (order_id) REFERENCES sales(order_id) ON DELETE CASCADE,
@@ -59,12 +61,11 @@ CREATE TABLE IF NOT EXISTS sales_items (
 
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_sales_client_id ON sales(client_id);
-CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(date);
-CREATE INDEX IF NOT EXISTS idx_sales_price_type ON sales(price_type);
 CREATE INDEX IF NOT EXISTS idx_sales_items_sku ON sales_items(sku);
+CREATE INDEX IF NOT EXISTS idx_items_sku ON items(sku);
+CREATE INDEX IF NOT EXISTS idx_clients_id ON clients(client_id);
+CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(date);
 CREATE INDEX IF NOT EXISTS idx_clients_name ON clients(client_name);
-CREATE INDEX IF NOT EXISTS idx_items_category ON items(category);
-CREATE INDEX IF NOT EXISTS idx_items_brand ON items(brand);
 
 -- Create updated_at trigger function
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -107,3 +108,5 @@ COMMENT ON COLUMN sales_items.line_no IS 'Line number within the order';
 COMMENT ON COLUMN sales_items.qty IS 'Quantity of the item sold';
 COMMENT ON COLUMN sales_items.price IS 'Unit price of the item';
 COMMENT ON COLUMN sales_items.total IS 'Total amount for this line item (qty * price)';
+COMMENT ON COLUMN sales_items.vat IS 'VAT amount for this line item';
+COMMENT ON COLUMN sales_items.selfcost IS 'Self cost of the item for this line item';

@@ -55,3 +55,4 @@ sales_old.json
 
 # Docker
 .dockerignore
+.env

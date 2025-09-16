@@ -18,6 +18,15 @@ class Settings:
     # Postgres
     pg_dsn: str = os.getenv("PG_DSN", "")
     pg_table: str = os.getenv("PG_TABLE", "sales")
+    pg_clients_table: str = os.getenv("PG_CLIENTS_TABLE", "clients")
+    pg_items_table: str = os.getenv("PG_ITEMS_TABLE", "items")
+    pg_sales_items_table: str = os.getenv("PG_SALES_ITEMS_TABLE", "sales_items")
+
+    # Data Loader Service
+    data_loader_port: int = int(os.getenv("DATA_LOADER_PORT", "8000"))
+    data_loader_host: str = os.getenv("DATA_LOADER_HOST", "0.0.0.0")
+    data_loader_max_size: int = int(os.getenv("DATA_LOADER_MAX_SIZE", str(10 * 1024 * 1024)))  # 10MB
+    data_loader_chunk_size: int = int(os.getenv("DATA_LOADER_CHUNK_SIZE", "5000"))
 
     # Телеграм бот
     telegram_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")

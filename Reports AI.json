@@ -1,0 +1,878 @@
+{
+  "name": "Reports AI",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "6b150169-782c-43ff-ac58-7bc9ac7037da",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -464,
+        176
+      ],
+      "id": "4a041037-c4c9-4d65-a3fa-3c4fb3211631",
+      "name": "Webhook",
+      "webhookId": "6b150169-782c-43ff-ac58-7bc9ac7037da"
+    },
+    {
+      "parameters": {
+        "text": "=User request:\n{{ $('Transcribe a recording').item.json.text }}\n\nPreviously parsed data:\n{{JSON.stringify($('get memory').item.json.messages)}}\nReports catalog :\n{{ $('stringify').item.json.catalog }}\n\nToday is :\n{{ $today.format('yyyy-MM-dd') }}",
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"report_requested\": { \"type\": \"boolean\", \"description\": \"True if user asked for any report.\" },\n    \"report_slug\": { \"type\": \"string\", \"nullable\": true, \"description\": \"Slug of the requested report (exact). If none, null.\" },\n    \"parameters\": { \"type\": \"object\", \"description\": \"Parameters explicitly provided by user (normalized where possible).\" },\n    \"required_parameters\": {\n      \"type\": \"array\",\n      \"items\": { \"type\": \"string\" },\n      \"description\": \"All required parameter names for the resolved report_slug, taken from the provided report catalog.\"\n    },\n    \"missing_parameters\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"name\": { \"type\": \"string\" },\n          \"allowed\": { \"type\": \"array\", \"items\": {} , \"nullable\": true },\n          \"reason\": { \"type\": \"string\", \"nullable\": true }\n        },\n        \"required\": [\"name\"]\n      },\n      \"description\": \"Which required params are missing or invalid.\"\n    },\n    \"has_all_required_params\": { \"type\": \"boolean\", \"description\": \"True if all required params for this report_slug are present and valid.\" }\n  },\n  \"required\": [\n    \"report_requested\",\n    \"report_slug\",\n    \"parameters\",\n    \"required_parameters\",\n    \"missing_parameters\",\n    \"has_all_required_params\"\n  ]\n}\n",
+        "options": {
+          "systemPromptTemplate": "You are an expert information extractor.\n\nINPUTS YOU RECEIVE (via the user message/context):\n- transcript: the user's text to analyze (current turn only).\n- catalog: JSON with exact report slugs, aliases, and parameter specs (types, allowed, min/max, format, requirements).\n- previous: JSON from a prior turn (e.g., last resolved report_slug and parameters). May be null.\n\nSTRICT OUTPUT REQUIREMENTS:\n- Return ONLY valid JSON conforming to the provided schema.\n- No markdown, no code fences, no explanations, no trailing text.\n\nFOLLOW-UP PRIORITY:\n- If previous.report_slug exists and THIS message does NOT explicitly name a different slug/alias with a switch verb,\n  treat this message as a FOLLOW-UP to previous.report_slug (assume same report).\n- “Mentions” like “клиенты / client / товар / goods” do NOT imply a new report by themselves.\n- Only switch to a new report when BOTH are true:\n  (a) a clear slug/alias from the catalog is explicitly stated, AND\n  (b) the message includes a switch cue such as: \n     [\"другой отчёт\",\"смени отчёт\",\"переключись\",\"новый отчёт\",\"изменим отчёт\",\"switch report\",\"change report\",\"use <slug> instead\"].\n- If ambiguous (keywords match multiple reports) and previous exists → stay with previous.report_slug.\n\n\nSTRICT EXTRACTION RULES:\n- Do NOT guess or assume values from enums or defaults.\n- Mark a parameter as present ONLY if the transcript explicitly mentions it (or an exact synonym mapping is provided).\n- If a parameter is not explicitly stated, leave it out and report it as missing if required.\n- Generic phrases like “средний чек” do NOT imply any dim value; do not set dim unless the transcript states one of the allowed values or synonyms.\n- Presence of parameter-like words (e.g., numbers/dates) WITHOUT an explicit new slug/alias does NOT imply switching report.\n- Extract only parameters for the decided report_slug; if report_slug is null, still extract generic values but do not force a new slug.\n\n\nGROUP REQUIREMENTS:\n- If no evidence selects an at_least_one_of group, prefer the smallest group (fewest params) for prompting (e.g., choose [\"period_days\"] over [\"date_from\",\"date_to\"]).\n\n\nTASK:\n1) Detect if the user requested a report in THIS message:\n   - Set report_requested = true only if this message expresses intent to get/run/prepare/send a report.\n   - Phrases that CLEARLY cancel/clear memory (e.g., \"reset\", \"cancel\", \"очисти\", \"сброс\", \"/cancel\") must set:\n     report_requested = false, report_slug = null, required_parameters = [], missing_parameters = [], has_all_required_params = false.\n\n2) Resolve report_slug:\n   a) If previous.report_slug exists and the message has no explicit switch cue + new slug/alias, set report_slug = previous.report_slug.\n   b) Else, if the message explicitly names a catalog slug/alias with a switch cue, set report_slug to that new slug.\n   c) Else, if the message explicitly names a single catalog slug/alias (no switch cue) AND NO previous.report_slug → set report_slug accordingly.\n   d) Else, if multiple matches or only generic words are present → if previous.report_slug exists, keep it; otherwise leave report_slug = null.\n   e) Never invent slugs not present in the catalog.\n\n\n3) Extract parameters from THIS message into \"parameters\":\n   - Normalize numbers (e.g., \"30 дней\" → 30) and dates (YYYY-MM-DD).\n   - Do not copy parameters from `previous` into \"parameters\"; only extract what is mentioned now.\n     (Downstream logic can merge if needed.)\n\n4) required_parameters:\n   - From catalog[report_slug].requirements:\n     - Include all in `required`, and if any at_least_one_of groups exist, choose one group that would satisfy the rule.\n   - If no report_slug, set required_parameters = [].\n\n5) missing_parameters:\n   - Compare \"parameters\" to catalog constraints (type, enum, min/max, format, requirements).\n   - For each required or selected group param that is absent or invalid, add an entry:\n      \"name\": <param>, \"reason\": \"not_provided\" | \"invalid_type\" | \"out_of_range\" | \"not_in_allowed\" | \"invalid_format\" \n   - If the catalog has an enum, you MAY include \"allowed\": [ ... ]; otherwise omit \"allowed\".\n\n6) has_all_required_params:\n   - true only if report_slug is set AND all required/selected-group parameters are present and valid.\n   - Otherwise false.\n\nEDGE CASES:\n- If no report intent in THIS message AND no clear follow-up content: \n  report_requested = false, report_slug = null, required_parameters = [], missing_parameters = [], has_all_required_params = false.\n- If message is a memory reset: behave as reset regardless of previous state.\n\nDO NOT:\n- Do not include markdown/code fences.\n- Do not invent parameters or defaults not specified by the user or catalog.\n- Do not copy `previous.parameters` into \"parameters\"."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.informationExtractor",
+      "typeVersion": 1.2,
+      "position": [
+        784,
+        176
+      ],
+      "id": "823801a7-7a07-4913-bad6-f9bef79c33bc",
+      "name": "Information Extractor"
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={\n    \"reports\": [\n        {\n            \"slug\": \"new_customers\",\n            \"title\": \"Новые клиенты (эффективность привлечения)\",\n            \"aliases\": [\n                \"новые клиенты\",\n                \"новые покупатели\",\n                \"привлечение\",\n                \"новые\",\n                \"new customers\",\n                \"new clients\",\n                \"acquisition\"\n            ],\n            \"requirements\": {\n                \"at_least_one_of\": [\n                    [\n                        \"period_days\"\n                    ],\n                    [\n                        \"date_from\",\n                        \"date_to\"\n                    ]\n                ]\n            },\n            \"params\": {\n                \"period_days\": {\n                    \"type\": \"integer\",\n                    \"min\": 1,\n                    \"max\": 5000,\n                    \"description\": \"Количество дней c сегодня для поиска клиентов с первым заказом\"\n                },\n                \"date_from\": {\n                    \"type\": \"string\",\n                    \"format\": \"date\",\n                    \"min\": \"2000-01-01\",\n                    \"max\": \"2100-12-31\",\n                    \"description\": \"Точная начальная дата для анализа\"\n                },\n                \"date_to\": {\n                    \"type\": \"string\",\n                    \"format\": \"date\",\n                    \"min\": \"2000-01-01\",\n                    \"max\": \"2100-12-31\",\n                    \"description\": \"Точная конечная дата для анализа\"\n                }\n            }\n        },\n        {\n            \"slug\": \"inactive_clients\",\n            \"title\": \"Неактивные клиенты\",\n            \"aliases\": [\n                \"неактивные\",\n                \"неактивные клиенты\",\n                \"спящие клиенты\",\n                \"потерянные клиенты\",\n                \"inactive\",\n                \"inactive clients\",\n                \"dormant\",\n                \"lost clients\"\n            ],\n            \"requirements\": {\n                \"required\": [\n                    \"cutoff_days\",\n                    \"start_date\"\n                ]\n            },\n            \"params\": {\n                \"cutoff_days\": {\n                    \"type\": \"integer\",\n                    \"min\": 1,\n                    \"max\": 5000,\n                    \"description\": \"Дней без покупок для определения неактивности\"\n                },\n                \"start_date\": {\n                    \"type\": \"integer\",\n                    \"min\": 0,\n                    \"max\": 5000,\n                    \"description\": \"Начало периода в днях от сегодня (0 = сегодня)\"\n                }\n            }\n        },\n        {\n            \"slug\": \"average_check\",\n            \"title\": \"Средний чек (AOV) в разных разрезах\",\n            \"aliases\": [\n                \"средний чек\",\n                \"aov\",\n                \"средний заказ\",\n                \"средняя покупка\",\n                \"average check\",\n                \"average order value\",\n                \"aov analysis\"\n            ],\n            \"requirements\": {\n                \"required\": [\n                    \"dim\",\n                    \"date_from\",\n                    \"date_to\"\n                ],\n                \"description\": \"dim is always required, plus both date_from and date_to\"\n            },\n            \"params\": {\n                \"dim\": {\n                    \"type\": \"string\",\n                    \"allowed\": [\n                        \"overall\",\n                        \"client\",\n                        \"month\",\n                        \"client_month\"\n                    ],\n                    \"description\": \"Разрез анализа (dimension): overall - общий средний чек, client - по клиентам, month - по месяцам, client_month - по клиентам и месяцам\"\n                },\n                \"date_from\": {\n                    \"type\": \"string\",\n                    \"format\": \"date\",\n                    \"min\": \"2000-01-01\",\n                    \"max\": \"2100-12-31\",\n                    \"description\": \"Начальная дата\"\n                },\n                \"date_to\": {\n                    \"type\": \"string\",\n                    \"format\": \"date\",\n                    \"min\": \"2000-01-01\",\n                    \"max\": \"2100-12-31\",\n                    \"description\": \"Конечная дата\"\n                }\n            }\n        },\n        {\n            \"slug\": \"abc_goods\",\n            \"title\": \"ABC-анализ товаров по выручке\",\n            \"aliases\": [\n                \"abc товары\",\n                \"abc товаров\",\n                \"abc по товарам\",\n                \"abc анализ товаров\",\n                \"abc goods\",\n                \"abc products\",\n                \"abc analysis goods\",\n                \"товары abc\"\n            ],\n            \"requirements\": {\n                \"at_least_one_of\": [\n                    [\n                        \"period_days\"\n                    ],\n                    [\n                        \"date_from\",\n                        \"date_to\"\n                    ]\n                ]\n            },\n            \"params\": {\n                \"period_days\": {\n                    \"type\": \"integer\",\n                    \"min\": 1,\n                    \"max\": 5000,\n                    \"description\": \"Количество дней для анализа товаров\"\n                },\n                \"date_from\": {\n                    \"type\": \"string\",\n                    \"format\": \"date\",\n                    \"min\": \"2000-01-01\",\n                    \"max\": \"2100-12-31\",\n                    \"description\": \"Начальная дата\"\n                },\n                \"date_to\": {\n                    \"type\": \"string\",\n                    \"format\": \"date\",\n                    \"min\": \"2000-01-01\",\n                    \"max\": \"2100-12-31\",\n                    \"description\": \"Конечная дата\"\n                }\n            }\n        },\n        {\n            \"slug\": \"abc_clients\",\n            \"title\": \"ABC-анализ клиентов по выручке\",\n            \"aliases\": [\n                \"abc клиенты\",\n                \"abc по клиентам\",\n                \"abc анализ клиентов\",\n                \"abc clients\",\n                \"abc analysis clients\",\n                \"клиенты abc\",\n                \"abc revenue\"\n            ],\n            \"requirements\": {\n                \"at_least_one_of\": [\n                    [\n                        \"period_days\"\n                    ],\n                    [\n                        \"date_from\",\n                        \"date_to\"\n                    ]\n                ]\n            },\n            \"params\": {\n                \"period_days\": {\n                    \"type\": \"integer\",\n                    \"min\": 1,\n                    \"max\": 5000,\n                    \"description\": \"Количество дней для анализа клиентов\"\n                },\n                \"date_from\": {\n                    \"type\": \"string\",\n                    \"format\": \"date\",\n                    \"min\": \"2000-01-01\",\n                    \"max\": \"2100-12-31\",\n                    \"description\": \"Начальная дата\"\n                },\n                \"date_to\": {\n                    \"type\": \"string\",\n                    \"format\": \"date\",\n                    \"min\": \"2000-01-01\",\n                    \"max\": \"2100-12-31\",\n                    \"description\": \"Конечная дата\"\n                }\n            }\n        }\n    ]\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -16,
+        176
+      ],
+      "id": "3b319d30-9c01-48d3-8905-4ae92e09d012",
+      "name": "catalog"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "95883dfa-3c23-4212-9276-ad39aca98891",
+              "name": "catalog",
+              "value": "={{JSON.stringify($json.reports)}}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        208,
+        176
+      ],
+      "id": "947929e3-02b5-462a-8c36-d385ccf015c7",
+      "name": "stringify"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cdbaa0ec-95c0-4363-861d-f12da5fd8930",
+              "leftValue": "={{ $json.output.report_requested }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "ac0c35ca-e39c-4545-b24a-305a53ac1df2",
+              "leftValue": "={{ $json.output.report_slug }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1136,
+        176
+      ],
+      "id": "6d330266-8e04-4970-9628-154ccea9d074",
+      "name": "Report requested"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "4d6039a0-1946-4994-bac2-21d536d81b80",
+              "leftValue": "={{ $json.output.has_all_required_params }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1424,
+        -64
+      ],
+      "id": "3f457132-1165-443d-98c5-052caff667ee",
+      "name": "Has all params"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.output }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        2128,
+        -16
+      ],
+      "id": "dff7ae3d-df48-4658-842f-09ee5ebafbba",
+      "name": "Respond to Webhook"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.output }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        2832,
+        32
+      ],
+      "id": "ab74f37b-ddc9-4a29-9fb8-9a206288ed9a",
+      "name": "Respond to Webhook1"
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "messages": {
+          "messageValues": [
+            {
+              "type": "ai",
+              "message": "={{JSON.stringify($('Has all params').item.json.output)}}"
+            }
+          ]
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryManager",
+      "typeVersion": 1.1,
+      "position": [
+        2768,
+        336
+      ],
+      "id": "191f8a5c-2d9e-43cb-a546-51020119491f",
+      "name": "insert memory",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "options": {
+          "groupMessages": true
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryManager",
+      "typeVersion": 1.1,
+      "position": [
+        432,
+        176
+      ],
+      "id": "19195724-771c-46fd-9911-9660ea8f0daf",
+      "name": "get memory"
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Webhook').item.json.query.chat_id }}",
+        "contextWindowLength": 4
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        2848,
+        560
+      ],
+      "id": "2e7711f7-95f6-42b9-a139-77b1db064c23",
+      "name": "Simple Memory"
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Webhook').item.json.query.chat_id }}",
+        "contextWindowLength": 4
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        512,
+        400
+      ],
+      "id": "e0fae135-8edc-4acd-9a8c-bcf3bc07dfa9",
+      "name": "Simple Memory1"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "636f2a8a-8ed7-47fd-977f-79d063417df5",
+              "name": "output.ready",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "e159191a-50ed-4261-ab10-0925e0a3db5b",
+              "name": "output.report_slug",
+              "value": "={{ $('Information Extractor').item.json.output.report_slug }}",
+              "type": "string"
+            },
+            {
+              "id": "258ca915-7790-4fd9-ae40-88be71ecd67e",
+              "name": "output.parameters",
+              "value": "={{ $json.output.parameters }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1776,
+        -160
+      ],
+      "id": "b84fb082-038a-4dee-8035-eb00ed9f8c9c",
+      "name": "Report"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "636f2a8a-8ed7-47fd-977f-79d063417df5",
+              "name": "output.ready",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "e159191a-50ed-4261-ab10-0925e0a3db5b",
+              "name": "output.message",
+              "value": "={{ $json.message.content }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2480,
+        176
+      ],
+      "id": "5d9200b3-2590-499e-9e6c-0808be3b8f63",
+      "name": "Additional info"
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Webhook').item.json.query.chat_id }}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        2496,
+        896
+      ],
+      "id": "119826de-343c-4a3f-a5c1-f7b6d63fee5f",
+      "name": "Simple Memory2"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-3.5-turbo",
+          "mode": "list",
+          "cachedResultName": "gpt-3.5-turbo"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        864,
+        400
+      ],
+      "id": "b9d36230-c894-4174-8595-0bfcb55cb99d",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "NGHWBDq6M5FPWMDN",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "audio",
+        "operation": "transcribe",
+        "binaryPropertyName": "audio",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        -240,
+        176
+      ],
+      "id": "d5c5810c-4a9d-4dd1-84de-4ca071e4808f",
+      "name": "Transcribe a recording",
+      "credentials": {
+        "openAiApi": {
+          "id": "NGHWBDq6M5FPWMDN",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-3.5-turbo",
+          "mode": "list",
+          "cachedResultName": "GPT-3.5-TURBO"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "={{ $('Transcribe a recording').item.json.text }}"
+            },
+            {
+              "content": "You are a language detection utility.\nReturn ONLY the ISO 639-1 code of the language of the input text (e.g. \"en\", \"ru\", \"de\").\nNo explanations, no extra text.",
+              "role": "system"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1712,
+        176
+      ],
+      "id": "7f2f639e-1596-42cc-986b-2d8a3af0b72d",
+      "name": "Detect language",
+      "credentials": {
+        "openAiApi": {
+          "id": "NGHWBDq6M5FPWMDN",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-3.5-turbo",
+          "mode": "list",
+          "cachedResultName": "GPT-3.5-TURBO"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Report to generate:\n{{ $('Has all params').item.json.output.report_slug }}\nUser’s initial request:\n{{ $('Transcribe a recording').item.json.text }}\nMissing parameters:\n{{JSON.stringify($('Information Extractor').item.json.output.missing_parameters)}}\nAll extracted parameters:\n{{JSON.stringify($('Information Extractor').item.json.output.parameters)}}\nReports catalog:\n{{ $('stringify').item.json.catalog }}\nUser language to respond:\n{{ $json.message.content.language }}"
+            },
+            {
+              "content": "Task:\n- Check what information is missing or invalid for this report.\n- Explain to the user in clear, natural language what else they need to provide.\n- Use the same language as the user’s initial request.\n- Give short examples of acceptable values for each missing parameter.\n- Local currency is \"Sum\"\n\nOutput:\nReturn a short, friendly message that can be sent directly to the user.",
+              "role": "system"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        2064,
+        176
+      ],
+      "id": "84041972-63d3-4bc5-a31e-0e46eba3d8db",
+      "name": "Detect language1",
+      "credentials": {
+        "openAiApi": {
+          "id": "NGHWBDq6M5FPWMDN",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "delete",
+        "deleteMode": "all"
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryManager",
+      "typeVersion": 1.1,
+      "position": [
+        2416,
+        672
+      ],
+      "id": "aad99127-d664-4481-8ca0-e6a35b6c0fa8",
+      "name": "Delete memory"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-3.5-turbo",
+          "mode": "list",
+          "cachedResultName": "GPT-3.5-TURBO"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "={{ $('Transcribe a recording').item.json.text }}"
+            },
+            {
+              "content": "You are a language detection utility.\nReturn ONLY the ISO 639-1 code of the language of the input text (e.g. \"en\", \"ru\", \"de\").\nNo explanations, no extra text.",
+              "role": "system"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1360,
+        528
+      ],
+      "id": "4e0e7d64-12ca-4950-91ab-c46602a41e35",
+      "name": "Detect language2",
+      "credentials": {
+        "openAiApi": {
+          "id": "NGHWBDq6M5FPWMDN",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-3.5-turbo",
+          "mode": "list",
+          "cachedResultName": "GPT-3.5-TURBO"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=User’s initial request:\n\"{{ $('Transcribe a recording').item.json.text }}\"\n\nUser language to respond:\n{{ $json.message.content.language }}\n\nReports catalog (JSON):\n{{ $('stringify').item.json.catalog }}"
+            },
+            {
+              "content": "You are a concise assistant that helps the user request a report from a given catalog and clarify any missing details.\n\nAlways reply in the user’s language: {{ $json.lang }}   # e.g. \"ru\", \"en\", \"uz\". If missing, infer from initial_request.\nYour reply must be short, friendly, and immediately actionable (1–3 sentences; bullets allowed).\n\nBehavior:\n1) If the user clearly requested a specific report (by slug/title/alias), confirm it and\n   - if any parameters are missing or invalid → ask ONLY for those (give 1–2 terse examples each).\n   - otherwise → confirm all details are present and say you’ll proceed.\n2) If multiple catalog reports match the user’s intent → show a compact choice list (max 5) by title with short hints.\n3) If no report matches or the request is unclear → offer 3–6 relevant reports from the catalog (titles + 2–4 word hints)\n   tailored to the user’s initial request and previous messages.\n4) If the user asked to reset/clear/cancel → acknowledge and show 3–6 popular reports they can pick from next.\n5) Never ask the user to “send the report” or “generate now”. You only help pick a report and collect missing parameters.\n6) Be exact with parameter examples: use enum values if present; otherwise use reasonable ranges or date format “YYYY-MM-DD”.\n7) Do not output JSON or code blocks—plain human text only.\n\nImportant:\n- Prefer the user’s current intent in this turn; treat previous messages as context for disambiguation only.\n- If user intent conflicts with previous request, ask which report they want now (show the two best options).\n- If the catalog includes descriptions/requirements, use them to craft precise, minimal questions.\n",
+              "role": "system"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1712,
+        528
+      ],
+      "id": "4529ec40-32bb-4338-91d6-d793aa353882",
+      "name": "Detect language3",
+      "credentials": {
+        "openAiApi": {
+          "id": "NGHWBDq6M5FPWMDN",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "636f2a8a-8ed7-47fd-977f-79d063417df5",
+              "name": "output.ready",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "e159191a-50ed-4261-ab10-0925e0a3db5b",
+              "name": "output.message",
+              "value": "={{ $json.message.content }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2128,
+        528
+      ],
+      "id": "72131b82-f600-4fad-a114-93f65468d3e5",
+      "name": "No request"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.output }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        2480,
+        368
+      ],
+      "id": "c25fe815-7fab-4b15-9827-a8f01f9a1a0d",
+      "name": "Respond to Webhook2"
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Webhook').item.json.query.chat_id }}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        2144,
+        -192
+      ],
+      "id": "6af37ed1-66a4-4448-8b1a-3fc2bd4d54f8",
+      "name": "Simple Memory3"
+    },
+    {
+      "parameters": {
+        "mode": "delete",
+        "deleteMode": "all"
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryManager",
+      "typeVersion": 1.1,
+      "position": [
+        2064,
+        -416
+      ],
+      "id": "2ca3b448-7658-4c7c-919a-16196f4f73f8",
+      "name": "Delete memory1"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Transcribe a recording",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "catalog": {
+      "main": [
+        [
+          {
+            "node": "stringify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Information Extractor": {
+      "main": [
+        [
+          {
+            "node": "Report requested",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "stringify": {
+      "main": [
+        [
+          {
+            "node": "get memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report requested": {
+      "main": [
+        [
+          {
+            "node": "Has all params",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Detect language2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has all params": {
+      "main": [
+        [
+          {
+            "node": "Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Detect language",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get memory": {
+      "main": [
+        [
+          {
+            "node": "Information Extractor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "insert memory",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory1": {
+      "ai_memory": [
+        [
+          {
+            "node": "get memory",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Delete memory1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Additional info": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "insert memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory2": {
+      "ai_memory": [
+        [
+          {
+            "node": "Delete memory",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Information Extractor",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transcribe a recording": {
+      "main": [
+        [
+          {
+            "node": "catalog",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect language": {
+      "main": [
+        [
+          {
+            "node": "Detect language1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect language1": {
+      "main": [
+        [
+          {
+            "node": "Additional info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete memory": {
+      "main": [
+        []
+      ]
+    },
+    "Detect language2": {
+      "main": [
+        [
+          {
+            "node": "Detect language3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detect language3": {
+      "main": [
+        [
+          {
+            "node": "No request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No request": {
+      "main": [
+        [
+          {
+            "node": "Delete memory",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Respond to Webhook2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory3": {
+      "ai_memory": [
+        [
+          {
+            "node": "Delete memory1",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "12c6c236-d2aa-4301-b092-514bf10090d6",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "ac400f15e7db77e8a1531143f439511cf236f7577567b2f8ab403b1fd27e1f27"
+  },
+  "id": "tJbU8MEplnWNhHH7",
+  "tags": []
+}
