@@ -1,15 +1,16 @@
 import os
 import time
+import argparse
 
 OUT_DIR = './out'
-DAYS_OLD = 60
-now = time.time()
-cutoff = now - DAYS_OLD * 86400
 
-def clean_old_files(directory):
+def clean_old_files(directory, days_old):
     """Recursively clean old files in directory and subdirectories"""
     if not os.path.isdir(directory):
         return
+
+    now = time.time()
+    cutoff = now - days_old * 86400
 
     for filename in os.listdir(directory):
         filepath = os.path.join(directory, filename)
@@ -24,7 +25,17 @@ def clean_old_files(directory):
                     print(f"Error deleting {filepath}: {e}")
         elif os.path.isdir(filepath):
             # Recursively process subdirectories
-            clean_old_files(filepath)
+            clean_old_files(filepath, days_old)
 
-# Clean files in OUT_DIR and all subdirectories
-clean_old_files(OUT_DIR)
+def main():
+    parser = argparse.ArgumentParser(description='Clean old files from output directory')
+    parser.add_argument('-D', '--days', type=int, default=60,
+                       help='Number of days old files should be to delete (default: 60)')
+
+    args = parser.parse_args()
+
+    print(f"Cleaning files older than {args.days} days from {OUT_DIR}")
+    clean_old_files(OUT_DIR, args.days)
+
+if __name__ == "__main__":
+    main()
