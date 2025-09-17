@@ -117,3 +117,4 @@ report-sales-with-items:
 
 deploy:
 	rsync -avz --delete --exclude 'certs' --exclude 'www' --exclude '.git' --exclude '.venv' --exclude '.cursor' --exclude '.DS_Store' --exclude '__pycache__' ./ ddavlet@10.100.0.31:/home/ddavlet/reports_app
+	ssh syrop 'cd ./reports_app && make up'
